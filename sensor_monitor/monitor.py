@@ -57,10 +57,10 @@ class AlertStore:
         self._path = Path(path) if path else None
 
     def record(self, alert: Alert) -> None:
-        self.alerts.append(alert)
         if self._path:
             with self._path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(alert.to_dict()) + "\n")
+        self.alerts.append(alert)
 
 
 class SensorMonitor:
@@ -184,11 +184,9 @@ class SensorMonitor:
             return None
 
         if active:
-            state.active_conditions.add(condition)
             status = AlertStatus.RAISED
             severity = Severity.ALARM if condition in _ALARM_TYPES else Severity.WARNING
         else:
-            state.active_conditions.discard(condition)
             status = AlertStatus.CLEARED
             severity = Severity.INFO
             message = f"{condition.value} cleared on {state.sensor_id}."
@@ -218,6 +216,11 @@ class SensorMonitor:
             observed_rise_degrees_celsius_per_minute=rate,
         )
         self._store.record(alert)
+        # A failed write must leave the transition available for retry.
+        if active:
+            state.active_conditions.add(condition)
+        else:
+            state.active_conditions.discard(condition)
         return alert
 
     def _update_state(self, reading: SensorReading, state: SensorState) -> None:
