@@ -49,21 +49,5 @@ python3 sensor_monitor/models.py
 | Temperature unchanged for the configured duration | Flatline ALARM; a possible stuck sensor |
 | Malformed or implausible reading | Rejected with a reason |
 
-## Files
-
-```text
-sensor_monitor/
-  models.py       readings, sensor state, alerts, and configuration
-  parsing.py      input validation and timestamp handling
-  rules.py        condition detection
-  monitor.py      processing, alert transitions, and storage
-tests/
-  test_monitor.py       reading validation, sensor history, and alerts
-  test_persistence.py   stored records and retry after a failed write
-  test_config.py        invalid configuration
-run_demo.py       sample readings and console output
-design.md         assumptions, detection rules, storage, and safety considerations
-```
-
-See [design.md](design.md) for the decisions behind the implementation and its
-limits.
+See [design.md](design.md) for the architecture, trade-offs, and safety
+considerations.

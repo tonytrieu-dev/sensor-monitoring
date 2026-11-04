@@ -27,6 +27,16 @@ saves them. `models.py` defines readings, configuration, sensor state, and alert
 Validation errors are caught in one place, `SensorMonitor.process()`, which
 returns the rejected input and its reason in a `QuarantineRecord`.
 
+## Architecture trade-offs
+
+| Choice | Why | Cost |
+|---|---|---|
+| Separate rules from the monitor | Detection can be tested independently; history, alert state, and storage stay in one coordinator. | A few small classes instead of one function. |
+| Reject late readings rather than reorder them | Keeps the rate baseline chronological without buffering or waiting. | Late observations are excluded from detection. |
+| Alert on condition changes | Avoids repeating the same alarm on every reading. | An ongoing condition gets no reminders or acknowledgement tracking. |
+| Let the caller schedule stale checks | No background thread or scheduler inside the component. | Detection and recovery can be delayed until the next check. |
+| Keep sensor state in memory and append alerts to JSONL | Easy to run and inspect without a database. | State is lost on restart; memory and file size grow, and writes lack crash guarantees. |
+
 ## Assumptions and validation
 
 - Readings arrive roughly once per second. Sensor identity plus timestamp
@@ -111,8 +121,8 @@ Each module also has a small runnable check.
 
 1. **Independent evidence:** A plausible but incorrect sensor can hide a real
    condition or create a false alarm. Multiple sensors measuring the same point
-   could help operators compare readings and check whether they agree. The monitor would still make no
-   control decisions.
+   could help operators compare readings and check whether they agree. The
+   monitor would still make no control decisions.
 2. **Durable history and recovery:** Persist sensor state alongside a durable
    alert log that reveals changes to recorded entries. Define how to recover
-   after write failures and restarts. The current in-memory state and simple JSONL writer are demonstration choices.
+   after write failures and restarts.
