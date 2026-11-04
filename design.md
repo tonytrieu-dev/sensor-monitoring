@@ -54,9 +54,11 @@ returns the rejected input and its reason in a `QuarantineRecord`.
   defaulting to -50 through 2000 degrees Celsius. Pressure is absolute, in bar,
   and must be finite and nonnegative. Missing fields, malformed timestamps,
   overflow, and implausible values are quarantined.
-- No pressure process limits or upper physical bound were supplied. The
-  component therefore does not invent high-pressure or pressure-rise alarms.
-  Real equipment limits must be defined before adding those rules.
+- Pressure deliberately has no process limits or upper physical bound. The
+  alarm and rate engine is type-agnostic and ready to apply them, but inventing
+  high-pressure or pressure-rise thresholds without real equipment data would
+  risk false alarms or masked faults in a safety context. Defining real limits
+  later is configuration, not new code.
 - Configuration rejects boolean numeric values, NaN (not a number) or infinite limits, reversed
   ranges, negative rate limits or future tolerance, and non-positive stale or
   flatline durations. The timezone option must be an actual boolean.

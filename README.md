@@ -85,10 +85,13 @@ storage preserves earlier records. `tests/test_config.py` rejects invalid settin
 | Value unchanged for the configured duration | Temperature and pressure | Flatline ALARM; a possible stuck sensor |
 | Malformed or implausible reading | Temperature and pressure | Rejected with a reason |
 
-Temperature supplies alarm thresholds, a rate-of-rise limit, and a normal band.
-No pressure process limits were supplied, so the component raises no
-high-pressure or pressure-rise alarms; pressure relies on validation, stale, and
-flatline detection.
+Temperature ships with alarm thresholds, a rate-of-rise limit, and a normal
+band because those limits are known. Pressure deliberately has none: the alarm
+and rate engine is type-agnostic and ready for pressure limits, but inventing
+high-pressure or pressure-rise thresholds without real equipment data would risk
+false alarms or masked faults in a safety context. Until those limits are
+defined, pressure is covered by validation, stale, and flatline detection, and
+adding the thresholds later is configuration, not new code.
 
 See [design.md](design.md) for the architecture, trade-offs, and safety
 considerations.
