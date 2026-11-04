@@ -1,4 +1,4 @@
-"""Behavior tests for validation, chronology, detection, and alert transitions."""
+"""Shared temperature/pressure behavior and temperature-specific alarm tests."""
 
 from __future__ import annotations
 

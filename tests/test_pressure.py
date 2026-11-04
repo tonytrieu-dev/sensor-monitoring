@@ -1,4 +1,4 @@
-"""Pressure shares sensor tracking, without inheriting temperature limits."""
+"""Pressure-specific regressions; shared happy paths and edges are in test_monitor."""
 
 import unittest
 from datetime import datetime, timedelta, timezone

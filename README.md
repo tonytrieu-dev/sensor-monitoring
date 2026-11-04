@@ -1,8 +1,8 @@
 # Sensor Monitoring and Operator Decision Support
 
 A small Python component that checks timestamped temperature and pressure
-readings, flags concerning conditions, and saves alerts for an operator to review. It does not
-control equipment.
+readings, flags concerning conditions, and saves alerts for an operator to
+review. It does not control equipment.
 
 ## Run the demo
 
@@ -13,9 +13,8 @@ to install.
 python3 run_demo.py
 ```
 
-The demo processes a fixed list of sample readings from a temperature sensor and a
-pressure sensor. It includes
-a duplicate, a temperature outside the normal range, a high-temperature spike,
+The demo processes a fixed list of sample readings from a temperature sensor
+and a pressure sensor. It includes a duplicate, a temperature outside the normal range, a high-temperature spike,
 a nonnumeric value, an older reading, and a return to normal. It then checks
 whether either sensor has stopped reporting. No sensor hardware is needed.
 
@@ -54,6 +53,26 @@ python3 -m sensor_monitor.rules
 python3 -m sensor_monitor.monitor
 python3 sensor_monitor/models.py
 ```
+
+### Test coverage
+
+`tests/test_monitor.py` runs shared behaviors for **both temperature and
+pressure** using named subtests. `tests/test_pressure.py` checks pressure-specific
+rules and invalid inputs. The suite has 15 test methods, with multiple input
+cases inside the shared tests.
+
+| Category | Pressure coverage |
+|---|---|
+| Happy path | Changing, valid readings produce no alerts and update sensor history. |
+| Edge cases | Invalid timestamps, boolean/nonnumeric values, negative pressure, NaN/infinity, and ambiguous measurements are rejected. Stale timing is checked at the exact threshold. |
+| Regressions | Duplicate, older, and timezone-equivalent readings preserve history. Celsius thresholds never apply to pressure, and a sensor cannot change measurement type. |
+| Alert lifecycle | Stale and flatline conditions raise once, remain quiet, and clear on recovery. Missing readings restart the flatline window. |
+| Integration | Real parsing, rules, and sensor state work together; temperature and pressure sensors remain independent. |
+
+Temperature also has tests for its high-temperature and rate-of-rise rules.
+`tests/test_persistence.py` uses real files to check stored rate evidence and
+failed-write retry. The shared monitor test file also checks that reopening
+storage preserves earlier records. `tests/test_config.py` rejects invalid settings.
 
 ## What it detects
 
