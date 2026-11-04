@@ -1,11 +1,11 @@
 # Sensor Monitoring and Operator Decision Support
 
-## Boundaries and data flow
+## How it works
 
-This component accepts temperature readings from multiple sensors and reports
-conditions for an operator. It makes no automatic control decisions. Pressure
-measurement handling is outside this implementation because the supplied
-configuration defines temperature rules only.
+This component accepts temperature readings from multiple sensors and flags
+concerning conditions for an operator. It makes no automatic control decisions.
+Only temperature readings are supported because the supplied configuration
+defines temperature rules only.
 
 ```mermaid
 flowchart LR
@@ -20,25 +20,26 @@ flowchart LR
     STORE --> VIEW[Operator output]
 ```
 
-`parsing.py` validates input; `rules.py` detects reading-driven conditions;
-`monitor.py` coordinates history, transitions, and storage. `models.py` holds
-readings, configuration, state, and alerts. Validation errors propagate to the
-single exception boundary in `SensorMonitor.process()`, which returns a
-`QuarantineRecord` containing the original input and a reason.
+`parsing.py` validates each input, and `rules.py` checks for abnormal conditions.
+`monitor.py` keeps sensor history, decides when to raise or clear alerts, and
+saves them. `models.py` defines readings, configuration, sensor state, and alerts.
+Validation errors are caught in one place, `SensorMonitor.process()`, which
+returns the rejected input and its reason in a `QuarantineRecord`.
 
 ## Assumptions and validation
 
 - Readings arrive roughly once per second. Sensor identity plus timestamp
-  identifies one observation; different sensors maintain independent state.
-- Timestamps are ISO-8601, normalized to UTC. Naive timestamps are rejected
-  unless `assume_utc_if_naive` is explicitly the boolean `True`.
+  identifies one observation. Each sensor has its own history.
+- Timestamps use ISO-8601 and are converted to UTC. Timestamps without a
+  timezone are rejected unless `assume_utc_if_naive` is explicitly the boolean `True`.
 - Readings more than two seconds into the future are rejected by default.
-  `process(raw, now=...)` accepts an injected clock value; omitted `now` uses
-  host UTC time. Historical readings have no age cutoff, allowing replay.
+  `process(raw, now=...)` accepts an explicit current time for tests or replay.
+  Without `now`, it uses the computer's UTC clock. Older readings have no age
+  cutoff, so recorded readings can be replayed.
 - Values must be numeric, excluding booleans, and within the configurable
   physical range, defaulting to -50 through 2000 degrees Celsius. Missing
   fields, malformed timestamps, overflow, and implausible values are quarantined.
-- Configuration rejects boolean numeric values, non-finite limits, reversed
+- Configuration rejects boolean numeric values, NaN (not a number) or infinite limits, reversed
   ranges, negative rate limits or future tolerance, and non-positive stale or
   flatline durations. The timezone option must be an actual boolean.
 
@@ -49,7 +50,7 @@ The caller receives the quarantine record and decides how to retain it.
 
 A timestamp equal to the sensor's last accepted timestamp is a duplicate; an
 older timestamp is out of order. Both are quarantined without changing the
-baseline used by later rate calculations.
+previous value used by later rate calculations.
 
 | Condition | Detection and response |
 |---|---|
@@ -61,14 +62,15 @@ baseline used by later rate calculations.
 
 Rules run before state updates so they see the previous reading and the start
 of any unchanged-value run. Sensors are tracked after their first accepted
-reading; detecting a sensor that never reports requires an external roster.
+reading. Detecting a sensor that never reports requires a separate list of
+expected sensors.
 
 ## Repeated alerts
 
-Each sensor maintains a set of active conditions. A condition becoming active
-emits one `RAISED`; persistence emits nothing; recovery emits one `CLEARED`.
-A later recurrence can raise again. This avoids reporting the same condition
-on every reading.
+Each sensor keeps a set of active conditions. A new condition produces one
+`RAISED` alert. Further readings with the same condition produce no additional
+alerts. When the condition ends, the monitor produces one `CLEARED` alert. If
+it happens again later, it can raise again.
 
 ## Alert records and storage
 
@@ -84,10 +86,10 @@ warnings use WARNING. Clears use INFO. The operator line is formatted from the
 same alert. Flatline observations and thresholds are recorded in seconds.
 
 `AlertStore` retains alerts in memory and optionally appends one JSON object per
-line to a JSONL file. Reopening a store preserves existing records. File errors
-propagate, leaving the failed transition pending; callers must retry after
-storage recovers. This prototype provides neither crash-safe transactions nor
-power-loss durability. State is lost on restart.
+line to a JSONL file. Reopening a store preserves existing records. If a file
+write fails, the error reaches the caller and the alert remains available for
+retry. The caller must retry after fixing the storage problem. Writes are not
+guaranteed to survive a crash or power loss. Sensor state is lost on restart.
 
 ## Test examples
 
@@ -102,13 +104,14 @@ The unittest suite uses real temporary files, without mocks:
 - Malformed readings retain rejection reasons and do not postpone staleness.
 - Reopening storage preserves history; a failed alarm write can be retried.
 
-Module self-checks provide additional runnable smoke checks.
+Each module also has a small runnable check.
 
 ## Production and safety considerations
 
 1. **Independent evidence:** A plausible but incorrect sensor can hide a real
-   condition or create a false alarm. Redundant sensors and voting could improve
-   operator evidence; this component would still make no control decisions.
-2. **Durable history and recovery:** Persist sensor state alongside a durable,
-   tamper-evident alert log, with defined failure and restart behavior. The
-   current in-memory state and simple JSONL writer are demonstration choices.
+   condition or create a false alarm. Multiple sensors measuring the same point
+   could help operators compare readings and check whether they agree. The monitor would still make no
+   control decisions.
+2. **Durable history and recovery:** Persist sensor state alongside a durable
+   alert log that reveals changes to recorded entries. Define how to recover
+   after write failures and restarts. The current in-memory state and simple JSONL writer are demonstration choices.

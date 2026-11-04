@@ -1,7 +1,7 @@
-"""One-command demo. Feeds a realistic stream through the monitor, prints the
-operator console view, and writes alerts.jsonl next to this file.
+"""Process sample readings, print alerts, and append them to alerts.jsonl
+next to this file.
 
-    python run_demo.py
+    python3 run_demo.py
 """
 
 from __future__ import annotations
