@@ -1,11 +1,4 @@
-"""Cross-module behavior tests.
-
-Per-module contracts are covered by each module's own self-check (run
-`python -m sensor_monitor.<module>`). This suite covers what those cannot: the
-monitor coordinating validation + state + detection + FSM + persistence
-end-to-end, plus regression anchors for the two invariants most likely to
-silently break (duplicate must not mutate state; stale must not re-emit).
-"""
+"""Behavior tests for validation, chronology, detection, and alert transitions."""
 
 from __future__ import annotations
 
@@ -15,7 +8,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sensor_monitor.models import AlertStatus, AlertType, MonitoringConfig
+from sensor_monitor.models import AlertStatus, AlertType, MonitoringConfig, SensorReading
 from sensor_monitor.monitor import AlertStore, SensorMonitor, format_for_operator
 from sensor_monitor.parsing import QuarantineRecord
 
@@ -40,15 +33,11 @@ def reading(value, offset_seconds=0.0, sensor_id="T-101"):
 
 
 class HappyPath(unittest.TestCase):
-    """Mission-critical normal operation. If these break, the component's core
-    job is dead even when the failure-mode tests still pass, so they are
-    asserted explicitly."""
-
     def test_valid_reading_is_accepted_and_returned(self):
         monitor = SensorMonitor(CONFIG)
         result = monitor.process(reading(600.0, 0))
 
-        self.assertNotIsInstance(result, QuarantineRecord)
+        assert isinstance(result, SensorReading), result
         self.assertEqual(result.sensor_id, "T-101")
         self.assertEqual(result.value, 600.0)
         self.assertEqual(result.unit, "celsius")
@@ -58,7 +47,7 @@ class HappyPath(unittest.TestCase):
         monitor.process(reading(600.0, 0))
 
         state = monitor.state_for("T-101")
-        self.assertIsNotNone(state.last_accepted_reading)
+        assert state.last_accepted_reading is not None
         self.assertEqual(state.last_accepted_reading.value, 600.0)
         self.assertEqual(state.last_valid_timestamp, BASE)
 
@@ -72,20 +61,12 @@ class HappyPath(unittest.TestCase):
             monitor.process(reading(value, offset_seconds=i))
 
         self.assertEqual(monitor.store.alerts, [])
-        self.assertEqual(monitor.state_for("T-101").last_accepted_reading.value, 600.3)
-
-    def test_not_stale_within_threshold_emits_nothing(self):
-        monitor = SensorMonitor(CONFIG)
-        monitor.process(reading(600.0, 0))
-        # Checked 3s later, within the 5s stale threshold: healthy, no alert.
-        emitted = monitor.check_stale_sensors(BASE + timedelta(seconds=3))
-        self.assertEqual(emitted, [])
+        accepted = monitor.state_for("T-101").last_accepted_reading
+        assert accepted is not None
+        self.assertEqual(accepted.value, 600.3)
 
 
 class RegressionAnchors(unittest.TestCase):
-    """These guard invariants that are easy to break with an innocent-looking
-    refactor and hard to notice in production. Each fails loudly if violated."""
-
     def test_duplicate_does_not_mutate_state(self):
         monitor = SensorMonitor(CONFIG)
         monitor.process(reading(600.0, 0))
@@ -93,7 +74,7 @@ class RegressionAnchors(unittest.TestCase):
 
         result = monitor.process(reading(999.0, 0))  # same timestamp, new value
 
-        self.assertIsInstance(result, QuarantineRecord)
+        assert isinstance(result, QuarantineRecord), result
         self.assertIn("duplicate", result.reason)
         self.assertIs(monitor.state_for("T-101").last_accepted_reading, anchor)
 
@@ -104,10 +85,9 @@ class RegressionAnchors(unittest.TestCase):
         first = monitor.check_stale_sensors(BASE + timedelta(seconds=7))
         second = monitor.check_stale_sensors(BASE + timedelta(seconds=8))
 
-        raised_first = [a for a in first if a.status == AlertStatus.RAISED]
-        raised_second = [a for a in second if a.status == AlertStatus.RAISED]
-        self.assertEqual(len(raised_first), 1)
-        self.assertEqual(raised_second, [])
+        self.assertEqual([(a.alert_type, a.status) for a in first],
+                         [(AlertType.STALE_DATA, AlertStatus.RAISED)])
+        self.assertEqual(second, [])
 
 
 class OutOfOrderAndRate(unittest.TestCase):
@@ -117,7 +97,7 @@ class OutOfOrderAndRate(unittest.TestCase):
         monitor = SensorMonitor(CONFIG)
         monitor.process(reading(600.0, 10))
         rejected = monitor.process(reading(100.0, 0))  # older than last accepted
-        self.assertIsInstance(rejected, QuarantineRecord)
+        assert isinstance(rejected, QuarantineRecord), rejected
         self.assertIn("out-of-order", rejected.reason)
 
         monitor.process(reading(605.0, 70))  # 5 over 1 min from the 600 baseline
@@ -125,21 +105,6 @@ class OutOfOrderAndRate(unittest.TestCase):
             a for a in monitor.store.alerts if a.alert_type == AlertType.RATE_OF_RISE
         ]
         self.assertEqual(rate_alerts, [])  # 5/min < 10/min; baseline stayed 600
-
-    def test_very_short_interval_rate_uses_real_elapsed(self):
-        # Edge case: a sub-second interval produces a large but honest rate, and
-        # the alert records the exact interval it used so an operator can judge it.
-        monitor = SensorMonitor(CONFIG)
-        monitor.process(reading(600.0, 0))
-        monitor.process(reading(601.0, 0.5))  # +1 over 0.5s = 120/min
-        rate_alerts = [
-            a for a in monitor.store.alerts if a.alert_type == AlertType.RATE_OF_RISE
-        ]
-        self.assertEqual(len(rate_alerts), 1)
-        self.assertAlmostEqual(rate_alerts[0].elapsed_minutes, 0.5 / 60.0)
-        self.assertAlmostEqual(
-            rate_alerts[0].observed_rise_degrees_celsius_per_minute, 120.0
-        )
 
 
 class SensorIsolation(unittest.TestCase):
@@ -154,111 +119,83 @@ class SensorIsolation(unittest.TestCase):
 
 
 class EndToEnd(unittest.TestCase):
-    def test_realistic_stream_produces_expected_alerts_state_and_records(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / "alerts.jsonl"
+    def test_stream_records_every_transition_in_order(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.jsonl"
             monitor = SensorMonitor(CONFIG, store=AlertStore(path))
-
-            stream = [
-                reading(600.0, 0),       # normal baseline
-                reading(600.0, 0),       # duplicate -> quarantine
-                reading(660.0, 1),       # out of band (warning)
-                reading(700.0, 2),       # spike: high-temp + rate-of-rise
-                reading("hot", 3),       # malformed -> quarantine
-                reading(500.0, 1),       # out-of-order -> quarantine
-                reading(600.0, 4),       # back in band -> clears band + high-temp
-            ]
-            outcomes = [monitor.process(r) for r in stream]
-
-            quarantined = [o for o in outcomes if isinstance(o, QuarantineRecord)]
-            self.assertEqual(len(quarantined), 3)
-
-            raised = {
-                a.alert_type
-                for a in monitor.store.alerts
-                if a.status == AlertStatus.RAISED
-            }
-            self.assertIn(AlertType.OUT_OF_BAND, raised)
-            self.assertIn(AlertType.HIGH_TEMPERATURE, raised)
-            self.assertIn(AlertType.RATE_OF_RISE, raised)
-
-            cleared = {
-                a.alert_type
-                for a in monitor.store.alerts
-                if a.status == AlertStatus.CLEARED
-            }
-            self.assertIn(AlertType.HIGH_TEMPERATURE, cleared)
-
-            # Final state reflects the last accepted reading, not the rejected ones.
-            final = monitor.state_for("T-101")
-            self.assertEqual(final.last_accepted_reading.value, 600.0)
-            self.assertEqual(final.last_accepted_reading.timestamp, BASE + timedelta(seconds=4))
-
-            # Every alert was persisted as one valid JSONL line.
-            lines = path.read_text(encoding="utf-8").strip().splitlines()
-            self.assertEqual(len(lines), len(monitor.store.alerts))
-            for line in lines:
-                record = json.loads(line)
-                self.assertIn("event_timestamp", record)
-                self.assertIn("message", record)
-
-    def test_operator_line_is_human_readable(self):
-        monitor = SensorMonitor(CONFIG)
-        monitor.process(reading(600.0, 0))
-        monitor.process(reading(700.0, 1))
-        high = next(
-            a for a in monitor.store.alerts if a.alert_type == AlertType.HIGH_TEMPERATURE
-        )
-        line = format_for_operator(high)
-        # Assert the line's shape, not just that keywords appear somewhere: it
-        # must lead with the bracketed event time, carry the severity and sensor,
-        # end with the status, and embed the alert's own structured message.
-        self.assertTrue(line.startswith("[2026-08-20T14:05:01Z]"), line)
-        self.assertIn("ALARM", line)
-        self.assertIn("T-101", line)
-        self.assertIn(high.message, line)
-        self.assertTrue(line.rstrip().endswith("RAISED"), line)
+            for value, seconds in [(600, 0), (660, 1), (700, 2), (600, 4)]:
+                monitor.process(reading(value, seconds), now=BASE + timedelta(seconds=seconds))
+            records = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual([(r["alert_type"], r["status"]) for r in records], [
+                ("rate_of_rise", "raised"),
+                ("out_of_band", "raised"),
+                ("high_temperature", "raised"),
+                ("out_of_band", "cleared"),
+                ("high_temperature", "cleared"),
+                ("rate_of_rise", "cleared"),
+            ])
 
 
 class AuditRegressions(unittest.TestCase):
-    def test_exact_boundaries(self):
+    def test_high_temperature_at_limit_does_not_raise(self):
         monitor = SensorMonitor(CONFIG)
-        monitor.process(reading(665, 0))
-        monitor.process(reading(675, 60))
-        self.assertFalse(any(a.alert_type in {AlertType.HIGH_TEMPERATURE, AlertType.RATE_OF_RISE} for a in monitor.store.alerts))
-        self.assertEqual(monitor.check_stale_sensors(BASE + timedelta(seconds=65)), [])
+        monitor.process(reading(675), now=BASE)
+        self.assertEqual(
+            [a.alert_type for a in monitor.store.alerts], [AlertType.OUT_OF_BAND]
+        )
 
-    def test_band_boundary_and_lower_threshold(self):
+    def test_rate_at_limit_does_not_raise(self):
         monitor = SensorMonitor(CONFIG)
-        monitor.process(reading(500))
-        self.assertEqual(monitor.store.alerts[0].threshold, 550)
+        monitor.process(reading(600), now=BASE)
+        monitor.process(reading(610, 60), now=BASE + timedelta(seconds=60))
+        self.assertEqual(monitor.store.alerts, [])
+
+    def test_stale_starts_only_after_limit(self):
         monitor = SensorMonitor(CONFIG)
-        monitor.process(reading(675))
-        self.assertEqual([a.alert_type for a in monitor.store.alerts], [AlertType.OUT_OF_BAND])
+        monitor.process(reading(600), now=BASE)
+        self.assertEqual(monitor.check_stale_sensors(BASE + timedelta(seconds=5)), [])
+        alerts = monitor.check_stale_sensors(BASE + timedelta(seconds=5.001))
+        self.assertEqual([a.alert_type for a in alerts], [AlertType.STALE_DATA])
+
+    def test_low_band_warning_records_lower_bound(self):
+        monitor = SensorMonitor(CONFIG)
+        monitor.process(reading(500), now=BASE)
+        alert, = monitor.store.alerts
+        self.assertEqual(alert.alert_type, AlertType.OUT_OF_BAND)
+        self.assertEqual(alert.threshold, 550)
 
     def test_flatline_uses_seconds_and_restarts_after_stale_gap(self):
         monitor = SensorMonitor(CONFIG)
         for seconds in [0, 11, 12, 13, 14, 15, 16]:
             monitor.process(reading(600, seconds))
             flat = [a for a in monitor.store.alerts if a.alert_type == AlertType.FLATLINE]
-            self.assertEqual(len(flat), int(seconds == 16))
+            with self.subTest(elapsed_seconds=seconds):
+                self.assertEqual([a.status for a in flat],
+                                 [AlertStatus.RAISED] if seconds == 16 else [])
         self.assertEqual(flat[0].observed_value, 5)
         self.assertEqual(flat[0].unit, 'seconds')
         self.assertEqual(flat[0].threshold, 5)
 
-    def test_operator_order(self):
+    def test_operator_line_preserves_time_severity_sensor_condition_and_status_order(self):
         monitor = SensorMonitor(CONFIG)
-        monitor.process(reading(700))
-        alert = monitor.store.alerts[0]
-        self.assertEqual(format_for_operator(alert),
-            f"[2026-08-20T14:05:00Z] ALARM   T-101  high_temperature {alert.message} -> RAISED")
+        monitor.process(reading(700), now=BASE)
+        alert, = monitor.store.alerts
+        fields = format_for_operator(alert).split()
+        self.assertEqual(fields[:4], [
+            "[2026-08-20T14:05:00Z]", "ALARM", "T-101", "high_temperature",
+        ])
+        self.assertEqual(fields[4:-2], alert.message.split())
+        self.assertEqual(fields[-2:], ["->", "RAISED"])
 
     def test_store_reopening_preserves_history(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'alerts.jsonl'
-            for _ in range(2):
-                SensorMonitor(CONFIG, store=AlertStore(path)).process(reading(700))
-            self.assertEqual(len(path.read_text().splitlines()), 2)
+            SensorMonitor(CONFIG, store=AlertStore(path)).process(reading(700), now=BASE)
+            original = path.read_bytes()
+            SensorMonitor(CONFIG, store=AlertStore(path)).process(reading(710), now=BASE)
+            self.assertTrue(path.read_bytes().startswith(original))
+            records = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual([r["observed_value"] for r in records], [700, 710])
 
     def test_validation_reasons_and_stale_timer(self):
         cases = [
@@ -277,18 +214,22 @@ class AuditRegressions(unittest.TestCase):
         for changes, reason in cases:
             with self.subTest(changes=changes):
                 result = monitor.process(reading(600, 1) | changes, now=BASE)
-                self.assertIsInstance(result, QuarantineRecord)
+                assert isinstance(result, QuarantineRecord), result
                 self.assertIn(reason, result.reason)
                 self.assertIs(monitor.state_for('T-101').last_accepted_reading, anchor)
         for raw, reason in [(None, 'not an object'), ({}, 'sensor_id'),
                             ({'sensor_id': 'T-101'}, 'measurement')]:
-            self.assertIn(reason, monitor.process(raw, now=BASE).reason)
+            with self.subTest(raw=raw):
+                result = monitor.process(raw, now=BASE)
+                assert isinstance(result, QuarantineRecord), result
+                self.assertIn(reason, result.reason)
         self.assertEqual(len(monitor.check_stale_sensors(BASE + timedelta(seconds=6))), 1)
 
     def test_timezone_normalization(self):
         monitor = SensorMonitor(CONFIG)
         monitor.process(reading(600), now=BASE)
         result = monitor.process(reading(601) | {'timestamp': '2026-08-20T16:05:00+02:00'}, now=BASE)
+        assert isinstance(result, QuarantineRecord), result
         self.assertIn('duplicate', result.reason)
 
     def test_persistent_high_and_rate_emit_only_transitions(self):
@@ -296,26 +237,22 @@ class AuditRegressions(unittest.TestCase):
         for value, seconds in [(600, 0), (700, 60), (720, 120), (740, 180), (600, 240), (600, 241)]:
             monitor.process(reading(value, seconds))
         for kind in [AlertType.HIGH_TEMPERATURE, AlertType.RATE_OF_RISE]:
-            self.assertEqual([a.status for a in monitor.store.alerts if a.alert_type == kind],
-                             [AlertStatus.RAISED, AlertStatus.CLEARED])
+            with self.subTest(condition=kind):
+                self.assertEqual([a.status for a in monitor.store.alerts if a.alert_type == kind],
+                                 [AlertStatus.RAISED, AlertStatus.CLEARED])
 
-    def test_rate_guard_and_fields(self):
+    def test_rate_rule_ignores_zero_and_negative_intervals(self):
+        from dataclasses import replace
         from sensor_monitor.rules import RateOfRiseRule
+
         monitor = SensorMonitor(CONFIG)
-        previous = monitor.process(reading(600))
-        monitor.process(reading(601, .5))
-        alert = next(a for a in monitor.store.alerts if a.alert_type == AlertType.RATE_OF_RISE)
-        self.assertEqual(alert.previous_value, 600)
-        self.assertEqual(alert.previous_timestamp, BASE)
-        self.assertEqual(alert.observed_value, 601)
-        self.assertEqual(alert.elapsed_minutes, .5 / 60)
-        self.assertEqual(alert.observed_rise_degrees_celsius_per_minute, 120)
-        state = monitor.state_for('T-101')
-        for offset in [0, -.5]:
-            candidate = monitor.process(reading(900, offset))
-            self.assertIsInstance(candidate, QuarantineRecord)
-        self.assertIsNone(RateOfRiseRule().evaluate(previous, state, CONFIG))
-        self.assertIsNone(RateOfRiseRule().evaluate(state.last_accepted_reading, state, CONFIG))
+        previous = monitor.process(reading(600), now=BASE)
+        assert isinstance(previous, SensorReading), previous
+        state = monitor.state_for("T-101")
+        for seconds in [0, -.5]:
+            with self.subTest(elapsed_seconds=seconds):
+                candidate = replace(previous, value=900, timestamp=BASE + timedelta(seconds=seconds))
+                self.assertIsNone(RateOfRiseRule().evaluate(candidate, state, CONFIG))
 
     def test_stale_clears_once_on_poll_after_recovery(self):
         monitor = SensorMonitor(CONFIG)

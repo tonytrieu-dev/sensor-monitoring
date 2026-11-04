@@ -1,16 +1,10 @@
 """Regression tests for persistence failures and configuration safety."""
 
-import json
-import tempfile
 import unittest
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-from sensor_monitor.models import AlertStatus, AlertType, MonitoringConfig
-from sensor_monitor.monitor import AlertStore, SensorMonitor
+from sensor_monitor.models import MonitoringConfig
 
-BASE = datetime(2026, 8, 20, 14, 5, tzinfo=timezone.utc)
 RAW_CONFIG = {
     "normal_range_c": [550.0, 650.0],
     "high_temperature_alarm_c": 675.0,
@@ -18,16 +12,6 @@ RAW_CONFIG = {
     "stale_data_threshold_s": 5,
 }
 CONFIG = MonitoringConfig.from_raw(RAW_CONFIG)
-
-
-def reading(value: float, seconds: float = 0) -> dict:
-    return {
-        "timestamp": (BASE + timedelta(seconds=seconds)).isoformat(),
-        "sensor_id": "T-101",
-        "temperature_c": value,
-    }
-
-
 
 
 class ConfigurationValidation(unittest.TestCase):

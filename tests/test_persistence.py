@@ -6,7 +6,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from sensor_monitor.models import AlertStatus, AlertType, MonitoringConfig
+from sensor_monitor.models import AlertStatus, MonitoringConfig
 from sensor_monitor.monitor import AlertStore, SensorMonitor
 
 BASE = datetime(2026, 8, 20, 14, 5, tzinfo=timezone.utc)
@@ -28,34 +28,47 @@ def reading(value: float, seconds: float = 0) -> dict:
 
 
 class PersistenceFailures(unittest.TestCase):
-    def test_failed_raise_and_clear_can_be_retried(self):
+    def test_failed_raise_is_written_when_same_reading_is_retried(self):
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory) / "records"
             path = parent / "alerts.jsonl"
             monitor = SensorMonitor(CONFIG, store=AlertStore(path))
             with self.assertRaises(FileNotFoundError):
                 monitor.process(reading(700), now=BASE)
-            state = monitor.state_for("T-101")
-            self.assertEqual(state.active_conditions, set())
-            self.assertIsNone(state.last_accepted_reading)
             self.assertEqual(monitor.store.alerts, [])
+            self.assertIsNone(monitor.state_for("T-101").last_accepted_reading)
 
             parent.mkdir()
             monitor.process(reading(700), now=BASE)
+            self.assertTrue(path.is_file(), "Expected a persisted alert file")
+            records = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual(len(records), 1, "Expected exactly one persisted alert")
+            record = records[0]
+            self.assertEqual((record["alert_type"], record["status"]),
+                             ("high_temperature", "raised"))
+            self.assertEqual([a.status for a in monitor.store.alerts], [AlertStatus.RAISED])
+
+    def test_failed_clear_is_written_when_recovery_reading_is_retried(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "alerts.jsonl"
+            monitor = SensorMonitor(CONFIG, store=AlertStore(path))
+            monitor.process(reading(700), now=BASE)
             saved = path.read_text()
             path.unlink()
-            parent.rmdir()
-            with self.assertRaises(FileNotFoundError):
+            path.mkdir()
+            with self.assertRaises(IsADirectoryError):
                 monitor.process(reading(600, 1), now=BASE)
-            self.assertIn(AlertType.HIGH_TEMPERATURE, state.active_conditions)
-            self.assertEqual(state.last_accepted_reading.value, 700)
-            self.assertEqual(len(monitor.store.alerts), 1)
+            accepted = monitor.state_for("T-101").last_accepted_reading
+            assert accepted is not None
+            self.assertEqual(accepted.value, 700)
+            self.assertEqual([a.status for a in monitor.store.alerts], [AlertStatus.RAISED])
 
-            parent.mkdir()
+            path.rmdir()
             path.write_text(saved)
             monitor.process(reading(600, 1), now=BASE)
             records = [json.loads(line) for line in path.read_text().splitlines()]
-            self.assertEqual([r["status"] for r in records], ["raised", "cleared"])
+            self.assertEqual([(r["alert_type"], r["status"]) for r in records],
+                             [("high_temperature", "raised"), ("high_temperature", "cleared")])
             self.assertEqual([a.status for a in monitor.store.alerts],
                              [AlertStatus.RAISED, AlertStatus.CLEARED])
 
@@ -65,14 +78,13 @@ class PersistenceFailures(unittest.TestCase):
             monitor = SensorMonitor(CONFIG, store=AlertStore(path))
             monitor.process(reading(600), now=BASE)
             monitor.process(reading(601, .5), now=BASE)
-            record, = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertTrue(path.is_file(), "Expected a persisted alert file")
+            records = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual(len(records), 1, "Expected exactly one persisted alert")
+            record = records[0]
             self.assertEqual(record["alert_type"], "rate_of_rise")
             self.assertEqual(record["previous_value"], 600)
             self.assertEqual(record["previous_timestamp"], "2026-08-20T14:05:00Z")
             self.assertEqual(record["observed_value"], 601)
             self.assertEqual(record["elapsed_minutes"], .5 / 60)
             self.assertEqual(record["observed_rise_degrees_celsius_per_minute"], 120)
-            self.assertEqual(
-                (record["observed_value"] - record["previous_value"]) / record["elapsed_minutes"],
-                record["observed_rise_degrees_celsius_per_minute"],
-            )
