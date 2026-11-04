@@ -1,4 +1,4 @@
-"""Regression tests for persistence failures and configuration safety."""
+"""Regression tests for persistence failures: failed writes and stored rate evidence."""
 
 import json
 import tempfile
