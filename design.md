@@ -88,7 +88,8 @@ invokes this periodically (timer / scheduler). An invalid reading does **not**
 refresh the stale timer, only an accepted reading does. Recovery clears on the
 next explicit stale check. Future-date validation accepts an injected `now` in
 `process(raw, now=...)`; omitted `now` uses the host UTC clock. Historical
-readings have no age cutoff, allowing replay. Configuration is trusted.
+readings have no age cutoff, allowing replay. Configuration rejects non-finite thresholds, reversed ranges, negative rate
+limits or clock tolerance, and non-positive stale or flatline durations.
 
 ## 6. High-temperature and rate-of-rise handling
 
@@ -151,12 +152,17 @@ INFO (any CLEARED).
 Append-only JSON Lines, one alert per line. Human-readable, `grep`/`jq`/pandas
 friendly, no database. `AlertStore` also keeps alerts in memory for tests and the
 operator view. "Append-only" is deliberate: a recorded alert is a fact and is
-never rewritten.
+never rewritten. File errors propagate to the caller. Failed writes leave
+the condition transition pending for retry; the caller must retry the reading
+or stale check after storage recovers. This does not provide crash-safe disk
+transactions or power-loss durability.
 
 ## 10. Test cases (incl. edge cases)
 
-Per-module self-checks cover each contract in isolation; `tests/test_monitor.py`
-covers cross-module behavior. Highlights:
+Per-module self-checks provide runnable smoke checks. Tests in
+`tests/test_monitor.py` cover stream behavior; `tests/test_persistence.py`
+checks real file writes, failed-write retry, and stored rate evidence;
+`tests/test_config.py` checks configuration rejection. Highlights:
 
 1. **Duplicate does not mutate state** (regression anchor), a duplicate is
    quarantined and `last_accepted_reading` is unchanged. Guards the invariant
@@ -168,8 +174,8 @@ covers cross-module behavior. Highlights:
 4. **Very short interval** (edge), a sub-second gap yields a large but honest
    rate, and the alert records the exact interval used.
 5. **One sensor stale does not affect another** (edge), per-sensor isolation.
-6. **End-to-end**, a mixed stream (valid, duplicate, out-of-band, spike,
-   malformed, out-of-order, recovery) asserts final state, selected raised and cleared alert types, and that every alert was persisted as valid JSONL.
+6. **End-to-end**, a stream (normal, out-of-band, spike,
+   recovery) asserts the exact ordered list of persisted transitions.
 
 ## 11. Design patterns
 
