@@ -1,225 +1,114 @@
-# Design Note: Sensor Monitoring & Operator Decision Support
+# Sensor Monitoring and Operator Decision Support
 
-## 1. Component boundaries and data flow
+## Boundaries and data flow
 
-Four responsibilities, each in its own module, with one trust boundary and one
-error boundary.
+This component accepts temperature readings from multiple sensors and reports
+conditions for an operator. It makes no automatic control decisions. Pressure
+measurement handling is outside this implementation because the supplied
+configuration defines temperature rules only.
 
 ```mermaid
 flowchart LR
-    RAW["raw dict"] --> P
-
-    subgraph MONITOR["SensorMonitor: coordinator and error boundary"]
-        direction TB
-        P["parsing: validate at trust boundary"]
-        H{"duplicate or<br/>out-of-order?"}
-        ST["per-sensor state"]
-        R["rules: detect"]
-        FSM["alert FSM: dedupe RAISED / CLEARED"]
-        P -->|InvalidReadingError| Q["QuarantineRecord<br/>with reason"]
-        P -->|SensorReading| H
-        H -->|yes| Q
-        H -->|no| ST --> R --> FSM
-        STALE["check_stale_sensors at now"] --> FSM
-    end
-
-    FSM --> STORE["AlertStore<br/>JSONL and operator view"]
+    INPUT[Raw reading] --> PARSE[Validate and normalize]
+    PARSE --> HISTORY[Check per-sensor history]
+    PARSE -->|invalid| QUARANTINE[Quarantine with reason]
+    HISTORY -->|duplicate or older| QUARANTINE
+    HISTORY --> RULES[Evaluate rules before updating state]
+    RULES --> FSM[Emit condition transitions]
+    CLOCK[Explicit stale check] --> FSM
+    FSM --> STORE[AlertStore: memory and JSONL]
+    STORE --> VIEW[Operator output]
 ```
 
-- **parsing** validates a reading *in isolation* and either returns a
-  `SensorReading` or raises `InvalidReadingError`. It is the **trust boundary**:
-  nothing downstream re-validates format.
-- **monitor** (`SensorMonitor`) is the coordinator and the single **error
-  boundary**: the one `try/except` in the codebase lives in `process()` and
-  converts a bubbled-up `InvalidReadingError` into a `QuarantineRecord`. It owns
-  per-sensor state, the duplicate/out-of-order decision, the alert state
-  machine, and persistence.
-- **rules** are pure detection algorithms validated against reading + state.
-- **AlertStore** persists alerts as append-only JSON Lines.
+`parsing.py` validates input; `rules.py` detects reading-driven conditions;
+`monitor.py` coordinates history, transitions, and storage. `models.py` holds
+readings, configuration, state, and alerts. Validation errors propagate to the
+single exception boundary in `SensorMonitor.process()`, which returns a
+`QuarantineRecord` containing the original input and a reason.
 
-Low-level code never catches its own errors; they bubble to the coordinator
-whose job is to decide recovery (quarantine). Native timestamp parsing errors
-and numeric overflow also propagate to that boundary. This keeps each validator a flat
-sequence of guard clauses.
+## Assumptions and validation
 
-## 2. Assumptions
+- Readings arrive roughly once per second. Sensor identity plus timestamp
+  identifies one observation; different sensors maintain independent state.
+- Timestamps are ISO-8601, normalized to UTC. Naive timestamps are rejected
+  unless `assume_utc_if_naive` is explicitly the boolean `True`.
+- Readings more than two seconds into the future are rejected by default.
+  `process(raw, now=...)` accepts an injected clock value; omitted `now` uses
+  host UTC time. Historical readings have no age cutoff, allowing replay.
+- Values must be numeric, excluding booleans, and within the configurable
+  physical range, defaulting to -50 through 2000 degrees Celsius. Missing
+  fields, malformed timestamps, overflow, and implausible values are quarantined.
+- Configuration rejects boolean numeric values, non-finite limits, reversed
+  ranges, negative rate limits or future tolerance, and non-positive stale or
+  flatline durations. The timezone option must be an actual boolean.
 
-Each is a deliberate, tunable choice, not a hidden default.
+Quarantined readings do not update accepted state or refresh the stale timer.
+The caller receives the quarantine record and decides how to retain it.
 
-| Assumption | Choice | Why | Revisit if |
-|---|---|---|---|
-| Timestamp timezone | ISO-8601 UTC; **naive rejected** (opt-in `assume_utc_if_naive`) | An ambiguous clock reference is a data-quality failure in a safety context | The fleet emits naive UTC by spec |
-| Future-dating | Reject beyond `future_tolerance_seconds` (default 2.0) | Real sensor/host clocks drift a few seconds; future readings corrupt staleness and rate math | Tight time-sync is guaranteed |
-| Duplicate identity | `sensor_id + timestamp` | A second value for one instant is a fault, not new information; including `value` would let a flipped reading pass | Sensors report sub-second |
-| Physical plausibility | Value within `physical_range_celsius` (default −50…2000) | A non-physical value is a *sensor fault*, not a process alarm; it must not trip a false HIGH_TEMPERATURE | Real sensor spec differs (supply real bounds) |
-| Staleness detection | Explicit `check_stale_sensors(now)` call | A prototype has no scheduler; production calls this on a timer | none |
+## History and detection
 
-Timestamps are normalized to UTC at the boundary; values are `float` with the
-unit carried in a field, never in the name.
+A timestamp equal to the sensor's last accepted timestamp is a duplicate; an
+older timestamp is out of order. Both are quarantined without changing the
+baseline used by later rate calculations.
 
-## 3. Validation behavior (three tiers)
+| Condition | Detection and response |
+|---|---|
+| High temperature | Value strictly above `high_temperature_alarm_celsius`: ALARM. Equality does not raise this alarm. |
+| Rate of rise | `(value - previous_value) / elapsed_minutes` strictly above the configured rate: ALARM. Uses consecutive accepted readings and guards against non-positive elapsed time. |
+| Stale data | `check_stale_sensors(now)` raises ALARM when elapsed time since the last accepted timestamp exceeds the stale threshold. The caller must schedule these checks. Recovery clears on the next check. |
+| Outside normal band | Optional WARNING below or above the normal range, suppressed above the high-temperature threshold. |
+| Flatline | Optional ALARM for identical values lasting the configured window. A stale gap restarts that window. Equal samples are a heuristic, not proof of a stuck sensor. |
 
-1. **Well-formed?**, required fields present, value numeric (`bool` rejected so
-   `True` can't become `1.0`), timestamp parseable. → quarantine.
-2. **Trustworthy clock?**, timezone-aware, not future-dated. → quarantine.
-3. **Physically possible?**, value within the physical range. → quarantine as
-   bad data (a sensor fault), separate from a process alarm.
+Rules run before state updates so they see the previous reading and the start
+of any unchanged-value run. Sensors are tracked after their first accepted
+reading; detecting a sensor that never reports requires an external roster.
 
-A rejected reading becomes a structured `QuarantineRecord` with a reason, never
-a silent drop and never a bare log string.
+## Repeated alerts
 
-## 4. Duplicate and out-of-order handling
+Each sensor maintains a set of active conditions. A condition becoming active
+emits one `RAISED`; persistence emits nothing; recovery emits one `CLEARED`.
+A later recurrence can raise again. This avoids reporting the same condition
+on every reading.
 
-Both decisions need per-sensor history, so they live in the monitor, not the
-parser:
+## Alert records and storage
 
-- **Duplicate** (`timestamp == last accepted`) → quarantine; **state untouched**.
-- **Out-of-order** (`timestamp < last accepted`) → quarantine; **state untouched
-  and excluded from rate-of-rise**. A late low reading must not become the
-  baseline for a later rate calculation, that would fabricate a large,
-  misleading rate.
+Each structured alert contains event time, sensor ID, condition, severity,
+status, violated rule, observed value, threshold, unit, and a readable message.
+Rate alerts also contain `previous_value`, `previous_timestamp`,
+`elapsed_minutes`, and `observed_rise_degrees_celsius_per_minute`. For example,
+600 to 601 degrees Celsius over 0.5 seconds gives 120 degrees Celsius/minute;
+those values and the interval remain in the record for inspection.
 
-## 5. Stale-data handling
+High-temperature, rate, stale, and flatline alerts use ALARM severity; normal-band
+warnings use WARNING. Clears use INFO. The operator line is formatted from the
+same alert. Flatline observations and thresholds are recorded in seconds.
 
-The monitor cannot detect "no message arrived" purely reactively. For the
-prototype, `check_stale_sensors(now)` computes idle time per sensor and drives a
-`STALE_DATA` condition through the same alert state machine. A production system
-invokes this periodically (timer / scheduler). An invalid reading does **not**
-refresh the stale timer, only an accepted reading does. Recovery clears on the
-next explicit stale check. Future-date validation accepts an injected `now` in
-`process(raw, now=...)`; omitted `now` uses the host UTC clock. Historical
-readings have no age cutoff, allowing replay. Configuration rejects non-finite thresholds, reversed ranges, negative rate
-limits or clock tolerance, and non-positive stale or flatline durations.
+`AlertStore` retains alerts in memory and optionally appends one JSON object per
+line to a JSONL file. Reopening a store preserves existing records. File errors
+propagate, leaving the failed transition pending; callers must retry after
+storage recovers. This prototype provides neither crash-safe transactions nor
+power-loss durability. State is lost on restart.
 
-## 6. High-temperature and rate-of-rise handling
+## Test examples
 
-- **High temperature**: `value > high_temperature_alarm_celsius` → ALARM.
-- **Out-of-band** (added): outside `normal_range_celsius` but at or below alarm →
-  WARNING, both directions. Stays silent above the alarm so it does not
-  double-fire with high-temperature.
-- **Rate of rise**: `rate = (value − previous_value) / elapsed_minutes`, measured
-  against the immediately preceding *accepted* reading. Because duplicates and
-  out-of-order readings are already filtered, that baseline is always
-  chronologically prior, so the formula is well-defined. Guards: non-positive
-  elapsed → no alert (no divide-by-zero); decreasing value → negative rate → no
-  alert. The alert records `previous_value`, `previous_timestamp`,
-  `elapsed_minutes`, and the observed rate so an operator can judge a short
-  interval (a sub-second gap yields a large but honest rate).
-- **Flatline** (added): identical value held for `flatline_window_seconds` →
-  ALARM. This is a heuristic: equal endpoints can span missing samples, so it
-  cannot prove continuous frozen data. A gap exceeding the stale threshold
-  restarts the flatline window.
+The unittest suite uses real temporary files, without mocks:
 
-## 7. Repeated-alert policy: state-transition alerts
+- Duplicate, older, and timezone-equivalent readings are rejected without
+  corrupting the next rate calculation.
+- A sub-second rise records both values, the interval, and the expected rate
+  in JSONL. A rate exactly at the limit remains silent.
+- Stale checks respect the threshold, emit once, and clear after recovery;
+  another sensor's state remains independent.
+- Malformed readings retain rejection reasons and do not postpone staleness.
+- Reopening storage preserves history; a failed alarm write can be retried.
 
-Each `(sensor, condition)` pair is a two-state FSM:
+Module self-checks provide additional runnable smoke checks.
 
-```mermaid
-stateDiagram-v2
-    [*] --> Normal
-    Normal --> Active: condition detected / emit RAISED
-    Active --> Active: condition persists / no emit
-    Active --> Normal: condition clears / emit CLEARED
-```
+## Production and safety considerations
 
-Implemented as `SensorState.active_conditions: set[AlertType]`, membership *is*
-the state. An operator is alerted once when a condition appears and once when it
-resolves, never every second while it persists. We rejected the GoF State
-pattern (separate state classes) because there is no state-dependent *behavior* -
-only whether to emit, which one set-membership check expresses.
-
-## 8. Alert format (two views, one source of truth)
-
-The structured `Alert` is the source of truth; the operator line is formatted
-*from* it.
-
-- **Record (JSONL, machine/audit):** `event_timestamp, sensor_id, alert_type,
-  severity, status, rule_violated, observed_value, threshold, unit, message`,
-  plus `previous_value / previous_timestamp / elapsed_minutes /
-  observed_rise_degrees_celsius_per_minute` where relevant. Rate alerts include enough values and timing to recompute the rate.
-  Flatline records use elapsed seconds and a seconds threshold. These four rate-specific fields appear
-  only on rate-of-rise alerts; `Alert.to_dict()` omits any field that is `None`,
-  so every record stays compact and carries only what applies to it.
-- **Operator console (human):**
-  `[14:05:02Z] ALARM   T-101  high_temperature  T-101 at 700.0 celsius, alarm at 675.0. -> RAISED`
-  Severity-prefixed for triage; `RAISED`/`CLEARED` so resolution is visible.
-
-Severity tiers: ALARM (high-temp, rate, stale, flatline), WARNING (out-of-band),
-INFO (any CLEARED).
-
-## 9. Persistence / record format
-
-Append-only JSON Lines, one alert per line. Human-readable, `grep`/`jq`/pandas
-friendly, no database. `AlertStore` also keeps alerts in memory for tests and the
-operator view. "Append-only" is deliberate: a recorded alert is a fact and is
-never rewritten. File errors propagate to the caller. Failed writes leave
-the condition transition pending for retry; the caller must retry the reading
-or stale check after storage recovers. This does not provide crash-safe disk
-transactions or power-loss durability.
-
-## 10. Test cases (incl. edge cases)
-
-Per-module self-checks provide runnable smoke checks. Tests in
-`tests/test_monitor.py` cover stream behavior; `tests/test_persistence.py`
-checks real file writes, failed-write retry, and stored rate evidence;
-`tests/test_config.py` checks configuration rejection. Highlights:
-
-1. **Duplicate does not mutate state** (regression anchor), a duplicate is
-   quarantined and `last_accepted_reading` is unchanged. Guards the invariant
-   that corrupt/late data can't silently move current state.
-2. **Stale alert not re-emitted** (regression anchor), two consecutive stale
-   checks produce one RAISED, not two. Guards operator-spam prevention.
-3. **Out-of-order does not feed rate-of-rise** (edge), a late low reading is
-   rejected and does not become the rate baseline, so no fabricated spike.
-4. **Very short interval** (edge), a sub-second gap yields a large but honest
-   rate, and the alert records the exact interval used.
-5. **One sensor stale does not affect another** (edge), per-sensor isolation.
-6. **Persistence failure**, a real file error leaves a raised alert available
-   for retry; stored rate records retain the values and interval.
-
-## 11. Design patterns
-
-| Pattern | Decision | Reason |
-|---|---|---|
-| **Strategy** (detection rules) | **Selected**, for the reading-driven rules | Each rule is one responsibility, independently testable; the monitor coordinates without inlining every algorithm. Cost is one `Protocol` + small classes. Stale is deliberately *not* a Strategy, it is time-driven and does not fit the per-reading signature; forcing it in would be ceremony. |
-| **FSM as a set** | **Selected** | `active_conditions` set gives one-line transitions and dedup. |
-| **GoF State** | Rejected | No state-dependent behavior to justify state classes. |
-| Adapter | Rejected | One wire format; the parser's key-map is the extension point for a second. |
-| Observer | Rejected | One consumer (`AlertStore`); no decoupling needed. |
-| Chain of Responsibility | Rejected | Validation is a handful of guard clauses, not a deep pipeline. |
-| Factory Method | Rejected | Object creation doesn't vary by subtype. |
-
-### Data model note
-
-`SensorReading` carries `measurement_type`, `value`, and `unit` rather than a
-`temperature_c` field, so a pressure sensor slots in without reshaping the model,
-while staying type-safe (`value` is always `float`). Only temperature rules are
-implemented because the given config is temperature-specific, building
-unconfigurable pressure rules would be speculative. The ambiguous wire keys
-(`temperature_c`, `normal_range_c`, …) are mapped to clear internal names at the
-parsing/config boundary.
-
-### Correctness subtlety
-
-Rules evaluate *before* the state update in `process()`. This is required for
-flatline: the rule must see the start of the hold, and the clear-on-movement
-works because `flatline_value` has not yet been reset when the rule runs.
-
-## 12. What I'd revisit for a production, safety-significant system
-
-Two, chosen over a long list:
-
-1. **Redundant / voting monitoring.** This prototype watches each sensor
-   independently, so a single sensor that lies, reads plausibly but wrong, can
-   mask a real condition or raise a false one. A safety-significant deployment
-   would monitor redundant sensors on the same physical point and require
-   agreement (e.g. 2-out-of-3 voting), to improve operator evidence without making automatic control decisions. This is the single most important change and the one detection idea
-   I deliberately left out of the prototype as out of scope.
-
-2. **Durable, replayable, append-only state.** State here is in-memory and the
-   JSONL store is best-effort. A production system would persist both the alert
-   audit log and per-sensor state durably, so a restart replays from the record
-   rather than losing history, and every alert is a tamper-evident, append-only
-   entry. (Append-only auditability and deterministic replay are patterns I've
-   worked with directly; they map cleanly onto this monitoring problem without
-   needing any additional infrastructure in the prototype.)
+1. **Independent evidence:** A plausible but incorrect sensor can hide a real
+   condition or create a false alarm. Redundant sensors and voting could improve
+   operator evidence; this component would still make no control decisions.
+2. **Durable history and recovery:** Persist sensor state alongside a durable,
+   tamper-evident alert log, with defined failure and restart behavior. The
+   current in-memory state and simple JSONL writer are demonstration choices.
