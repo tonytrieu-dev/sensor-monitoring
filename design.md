@@ -15,7 +15,8 @@ flowchart LR
     HISTORY -->|duplicate or older| QUARANTINE
     HISTORY --> RULES[Evaluate rules before updating state]
     RULES --> FSM[Emit condition transitions]
-    CLOCK[Explicit stale check] --> FSM
+    TIMER[Caller or timer] --> CLOCK[Explicit stale check]
+    CLOCK --> FSM
     FSM --> STORE[AlertStore: memory and JSONL]
     STORE --> VIEW[Operator output]
 ```
