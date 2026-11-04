@@ -133,6 +133,8 @@ class SensorMonitor:
         previous = state.last_accepted_reading
         if previous is None:
             return None
+        if reading.measurement_type is not previous.measurement_type:
+            return QuarantineRecord(raw=dict(raw), reason="sensor measurement type cannot change")
         if reading.timestamp == previous.timestamp:
             return QuarantineRecord(raw=dict(raw), reason="duplicate timestamp")
         if reading.timestamp < previous.timestamp:

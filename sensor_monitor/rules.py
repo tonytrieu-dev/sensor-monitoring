@@ -11,7 +11,13 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from .models import AlertType, MonitoringConfig, SensorReading, SensorState
+from .models import (
+    AlertType,
+    MeasurementType,
+    MonitoringConfig,
+    SensorReading,
+    SensorState,
+)
 
 
 class DetectionRule(Protocol):
@@ -27,6 +33,8 @@ class HighTemperatureRule:
     def evaluate(
         self, reading: SensorReading, state: SensorState, config: MonitoringConfig
     ) -> AlertType | None:
+        if reading.measurement_type is not MeasurementType.TEMPERATURE:
+            return None
         if reading.value > config.high_temperature_alarm_celsius:
             return AlertType.HIGH_TEMPERATURE
         return None
@@ -36,6 +44,8 @@ class OutOfNormalBandRule:
     def evaluate(
         self, reading: SensorReading, state: SensorState, config: MonitoringConfig
     ) -> AlertType | None:
+        if reading.measurement_type is not MeasurementType.TEMPERATURE:
+            return None
         low, high = config.normal_range_celsius
         # Above the alarm threshold this is a HIGH_TEMPERATURE alarm, not a
         # band warning; stay silent so the two conditions do not double-fire.
@@ -50,6 +60,8 @@ class RateOfRiseRule:
     def evaluate(
         self, reading: SensorReading, state: SensorState, config: MonitoringConfig
     ) -> AlertType | None:
+        if reading.measurement_type is not MeasurementType.TEMPERATURE:
+            return None
         previous = state.last_accepted_reading
         if previous is None:
             return None
@@ -88,8 +100,6 @@ class FlatlineRule:
 
 def _self_check() -> None:
     from datetime import datetime, timedelta, timezone
-
-    from .models import MeasurementType
 
     config = MonitoringConfig.from_raw(
         {

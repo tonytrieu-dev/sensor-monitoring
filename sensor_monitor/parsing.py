@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from math import isfinite
 from typing import Any
 
 from .models import (
@@ -15,6 +16,7 @@ from .models import (
 
 _MEASUREMENT_KEYS: dict[str, tuple[MeasurementType, str]] = {
     "temperature_c": (MeasurementType.TEMPERATURE, "celsius"),
+    "pressure_bar": (MeasurementType.PRESSURE, "bar"),
 }
 
 
@@ -36,7 +38,7 @@ def parse_reading(
 
     measurement_type, unit, value = _extract_measurement(raw)
     timestamp = _parse_timestamp(raw.get("timestamp"), config, now)
-    _check_physical_bound(value, config)
+    _check_physical_bound(value, measurement_type, config)
 
     return SensorReading(
         timestamp=timestamp,
@@ -51,6 +53,9 @@ def _extract_measurement(raw: dict[str, Any]) -> tuple[MeasurementType, str, flo
     present = [key for key in _MEASUREMENT_KEYS if key in raw]
     if not present:
         raise InvalidReadingError("no recognized measurement field")
+
+    if len(present) != 1:
+        raise InvalidReadingError("reading must contain exactly one measurement field")
 
     key = present[0]
     measurement_type, unit = _MEASUREMENT_KEYS[key]
@@ -98,7 +103,13 @@ def _reject_if_future(
         raise InvalidReadingError(f"future-dated timestamp: {candidate!r}")
 
 
-def _check_physical_bound(value: float, config: MonitoringConfig) -> None:
+def _check_physical_bound(
+    value: float, measurement_type: MeasurementType, config: MonitoringConfig
+) -> None:
+    if measurement_type is MeasurementType.PRESSURE:
+        if not isfinite(value) or value < 0:
+            raise InvalidReadingError("absolute pressure must be finite and nonnegative (bar)")
+        return
     low, high = config.physical_range_celsius
     if not low <= value <= high:
         raise InvalidReadingError(f"value {value} outside physical range [{low}, {high}]")

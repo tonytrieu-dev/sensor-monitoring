@@ -14,6 +14,7 @@ from typing import Any
 
 class MeasurementType(str, Enum):
     TEMPERATURE = "temperature"
+    PRESSURE = "pressure"
 
 
 class AlertType(str, Enum):
