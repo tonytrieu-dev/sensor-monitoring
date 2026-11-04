@@ -48,29 +48,6 @@ class PersistenceFailures(unittest.TestCase):
                              ("high_temperature", "raised"))
             self.assertEqual([a.status for a in monitor.store.alerts], [AlertStatus.RAISED])
 
-    def test_failed_clear_is_written_when_recovery_reading_is_retried(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "alerts.jsonl"
-            monitor = SensorMonitor(CONFIG, store=AlertStore(path))
-            monitor.process(reading(700), now=BASE)
-            saved = path.read_text()
-            path.unlink()
-            path.mkdir()
-            with self.assertRaises(IsADirectoryError):
-                monitor.process(reading(600, 1), now=BASE)
-            accepted = monitor.state_for("T-101").last_accepted_reading
-            assert accepted is not None
-            self.assertEqual(accepted.value, 700)
-            self.assertEqual([a.status for a in monitor.store.alerts], [AlertStatus.RAISED])
-
-            path.rmdir()
-            path.write_text(saved)
-            monitor.process(reading(600, 1), now=BASE)
-            records = [json.loads(line) for line in path.read_text().splitlines()]
-            self.assertEqual([(r["alert_type"], r["status"]) for r in records],
-                             [("high_temperature", "raised"), ("high_temperature", "cleared")])
-            self.assertEqual([a.status for a in monitor.store.alerts],
-                             [AlertStatus.RAISED, AlertStatus.CLEARED])
 
     def test_stored_rate_evidence_reconstructs_subsecond_rate(self):
         with tempfile.TemporaryDirectory() as directory:

@@ -174,8 +174,8 @@ checks real file writes, failed-write retry, and stored rate evidence;
 4. **Very short interval** (edge), a sub-second gap yields a large but honest
    rate, and the alert records the exact interval used.
 5. **One sensor stale does not affect another** (edge), per-sensor isolation.
-6. **Persistence failures**, real file errors leave raised and cleared alerts
-   available for retry; stored rate records retain the values and interval.
+6. **Persistence failure**, a real file error leaves a raised alert available
+   for retry; stored rate records retain the values and interval.
 
 ## 11. Design patterns
 

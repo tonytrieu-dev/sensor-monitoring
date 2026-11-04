@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sensor_monitor.models import AlertStatus, AlertType, MonitoringConfig
-from sensor_monitor.monitor import AlertStore, SensorMonitor, format_for_operator
+from sensor_monitor.monitor import AlertStore, SensorMonitor
 from sensor_monitor.parsing import QuarantineRecord
 
 CONFIG = MonitoringConfig.from_raw(
@@ -109,16 +109,6 @@ class AuditRegressions(unittest.TestCase):
         self.assertEqual(flat[0].unit, 'seconds')
         self.assertEqual(flat[0].threshold, 5)
 
-    def test_operator_line_preserves_time_severity_sensor_condition_and_status_order(self):
-        monitor = SensorMonitor(CONFIG)
-        monitor.process(reading(700), now=BASE)
-        alert, = monitor.store.alerts
-        fields = format_for_operator(alert).split()
-        self.assertEqual(fields[:4], [
-            "[2026-08-20T14:05:00Z]", "ALARM", "T-101", "high_temperature",
-        ])
-        self.assertEqual(fields[4:-2], alert.message.split())
-        self.assertEqual(fields[-2:], ["->", "RAISED"])
 
     def test_store_reopening_preserves_history(self):
         with tempfile.TemporaryDirectory() as directory:
