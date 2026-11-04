@@ -76,14 +76,19 @@ storage preserves earlier records. `tests/test_config.py` rejects invalid settin
 
 ## What it detects
 
-| Condition | Result |
-|---|---|
-| Temperature above the alarm threshold | ALARM |
-| Temperature rising faster than the configured limit | ALARM, including the values and time interval used |
-| No accepted reading within the allowed time | ALARM, checked by calling `check_stale_sensors(now)` |
-| Temperature outside the normal range, at or below the alarm threshold | WARNING |
-| Temperature or pressure unchanged for the configured duration | Flatline ALARM; a possible stuck sensor |
-| Malformed or implausible reading | Rejected with a reason |
+| Condition | Applies to | Result |
+|---|---|---|
+| Temperature above the alarm threshold | Temperature | ALARM |
+| Temperature rising faster than the configured limit | Temperature | ALARM, including the values and time interval used |
+| No accepted reading within the allowed time | Temperature and pressure | ALARM, checked by calling `check_stale_sensors(now)` |
+| Temperature outside the normal range, at or below the alarm threshold | Temperature | WARNING |
+| Value unchanged for the configured duration | Temperature and pressure | Flatline ALARM; a possible stuck sensor |
+| Malformed or implausible reading | Temperature and pressure | Rejected with a reason |
+
+Temperature supplies alarm thresholds, a rate-of-rise limit, and a normal band.
+No pressure process limits were supplied, so the component raises no
+high-pressure or pressure-rise alarms; pressure relies on validation, stale, and
+flatline detection.
 
 See [design.md](design.md) for the architecture, trade-offs, and safety
 considerations.
