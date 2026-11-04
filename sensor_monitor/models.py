@@ -8,6 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from math import isfinite
 from typing import Any
 
 
@@ -112,6 +113,27 @@ class MonitoringConfig:
     physical_range_celsius: tuple[float, float] = (-50.0, 2000.0)
     future_tolerance_seconds: float = 2.0
     assume_utc_if_naive: bool = False
+
+    def __post_init__(self) -> None:
+        for name in ("normal_range_celsius", "physical_range_celsius"):
+            low, high = getattr(self, name)
+            if not isfinite(low) or not isfinite(high) or low > high:
+                raise ValueError(f"{name} must have finite bounds in ascending order")
+        for name in (
+            "high_temperature_alarm_celsius",
+            "max_rise_degrees_celsius_per_minute",
+            "stale_data_threshold_seconds",
+            "flatline_window_seconds",
+            "future_tolerance_seconds",
+        ):
+            if not isfinite(getattr(self, name)):
+                raise ValueError(f"{name} must be finite")
+        for name in ("max_rise_degrees_celsius_per_minute", "future_tolerance_seconds"):
+            if getattr(self, name) < 0:
+                raise ValueError(f"{name} must be nonnegative")
+        for name in ("stale_data_threshold_seconds", "flatline_window_seconds"):
+            if getattr(self, name) <= 0:
+                raise ValueError(f"{name} must be positive")
 
     @classmethod
     def from_raw(cls, raw: dict[str, Any]) -> MonitoringConfig:
