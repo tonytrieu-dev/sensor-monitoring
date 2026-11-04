@@ -1,0 +1,15 @@
+# Python caches
+__pycache__/
+*.pyc
+*.pyo
+
+# Generated demo artifact
+alerts.jsonl
+
+# Internal scratch / not part of the submission
+.assignment_reference.txt
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store

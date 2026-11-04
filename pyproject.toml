@@ -1,0 +1,8 @@
+[project]
+name = "sensor-monitor"
+version = "0.1.0"
+description = "Sensor monitoring and operator decision-support component"
+requires-python = ">=3.10"
+
+[tool.ruff]
+target-version = "py310"
