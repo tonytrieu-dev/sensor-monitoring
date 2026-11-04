@@ -36,7 +36,7 @@ def build_stream() -> list[dict]:
         {"timestamp": _at(3), "sensor_id": "T-101", "temperature_c": "n/a"},   # malformed
         {"timestamp": _at(1), "sensor_id": "T-101", "temperature_c": 500.0},   # out of order
         {"timestamp": _at(4), "sensor_id": "T-101", "temperature_c": 600.0},   # recovers
-        {"timestamp": _at(0), "sensor_id": "T-204", "temperature_c": 590.0},   # second sensor
+        {"timestamp": _at(0), "sensor_id": "P-204", "pressure_bar": 3.0},      # pressure sensor
     ]
 
 
@@ -51,7 +51,7 @@ def main() -> None:
         if isinstance(outcome, QuarantineRecord):
             print(f"  QUARANTINED {raw.get('sensor_id')} @ {raw.get('timestamp')}: {outcome.reason}")
 
-    # T-204 reported only at t=0; by t=10 it is stale.
+    # P-204 reported only at t=0; by t=10 it is stale.
     monitor.check_stale_sensors(BASE + timedelta(seconds=10))
 
     print("\n=== Operator console ===")

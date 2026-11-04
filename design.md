@@ -2,10 +2,10 @@
 
 ## How it works
 
-This component accepts temperature readings from multiple sensors and flags
-concerning conditions for an operator. It makes no automatic control decisions.
-Only temperature readings are supported because the supplied configuration
-defines temperature rules only.
+This component accepts temperature and pressure readings from multiple sensors
+and flags concerning conditions for an operator. It makes no automatic control
+decisions. Temperature limits apply only to temperature; validation, stale
+checks, and flatline detection apply to both types.
 
 ```mermaid
 flowchart LR
@@ -40,16 +40,23 @@ returns the rejected input and its reason in a `QuarantineRecord`.
 ## Assumptions and validation
 
 - Readings arrive roughly once per second. Sensor identity plus timestamp
-  identifies one observation. Each sensor has its own history.
+  identifies one observation. Each sensor has its own history and a fixed
+  measurement type. Readings with both measurement fields, or a changed sensor
+  type, are quarantined to avoid mixing units.
 - Timestamps use ISO-8601 and are converted to UTC. Timestamps without a
   timezone are rejected unless `assume_utc_if_naive` is explicitly the boolean `True`.
 - Readings more than two seconds into the future are rejected by default.
   `process(raw, now=...)` accepts an explicit current time for tests or replay.
   Without `now`, it uses the computer's UTC clock. Older readings have no age
   cutoff, so recorded readings can be replayed.
-- Values must be numeric, excluding booleans, and within the configurable
-  physical range, defaulting to -50 through 2000 degrees Celsius. Missing
-  fields, malformed timestamps, overflow, and implausible values are quarantined.
+- Each reading contains either `temperature_c` or `pressure_bar`. Values must
+  be numeric, excluding booleans. Temperature uses configurable physical bounds,
+  defaulting to -50 through 2000 degrees Celsius. Pressure is absolute, in bar,
+  and must be finite and nonnegative. Missing fields, malformed timestamps,
+  overflow, and implausible values are quarantined.
+- No pressure process limits or upper physical bound were supplied. The
+  component therefore does not invent high-pressure or pressure-rise alarms.
+  Real equipment limits must be defined before adding those rules.
 - Configuration rejects boolean numeric values, NaN (not a number) or infinite limits, reversed
   ranges, negative rate limits or future tolerance, and non-positive stale or
   flatline durations. The timezone option must be an actual boolean.
@@ -66,10 +73,10 @@ previous value used by later rate calculations.
 | Condition | Detection and response |
 |---|---|
 | High temperature | Value strictly above `high_temperature_alarm_celsius`: ALARM. Equality does not raise this alarm. |
-| Rate of rise | `(value - previous_value) / elapsed_minutes` strictly above the configured rate: ALARM. Uses consecutive accepted readings and guards against non-positive elapsed time. |
-| Stale data | `check_stale_sensors(now)` raises ALARM when elapsed time since the last accepted timestamp exceeds the stale threshold. The caller must schedule these checks. Recovery clears on the next check. |
-| Outside normal band | Optional WARNING below or above the normal range, suppressed above the high-temperature threshold. |
-| Flatline | Optional ALARM for identical values lasting the configured window. A stale gap restarts that window. Equal samples are a heuristic, not proof of a stuck sensor. |
+| Temperature rate of rise | `(value - previous_value) / elapsed_minutes` strictly above the configured rate: ALARM. Uses consecutive accepted readings and guards against non-positive elapsed time. |
+| Stale data (both types) | `check_stale_sensors(now)` raises ALARM when elapsed time since the last accepted timestamp exceeds the stale threshold. The caller must schedule these checks. Recovery clears on the next check. |
+| Temperature outside normal band | Optional WARNING below or above the normal range, suppressed above the high-temperature threshold. |
+| Flatline (both types) | Optional ALARM for identical values lasting the configured window. A stale gap restarts that window. Equal samples are a heuristic, not proof of a stuck sensor. |
 
 Rules run before state updates so they see the previous reading and the start
 of any unchanged-value run. Sensors are tracked after their first accepted
@@ -104,8 +111,11 @@ guaranteed to survive a crash or power loss. Sensor state is lost on restart.
 
 ## Test examples
 
-The unittest suite uses real temporary files, without mocks:
+The unittest suite uses real temporary files, without mocks. Shared validation,
+history, stale, and flatline checks run for both measurement types:
 
+- Mixed temperature and pressure readings keep independent state, and Celsius
+  limits never trigger pressure alarms.
 - Duplicate, older, and timezone-equivalent readings are rejected without
   corrupting the next rate calculation.
 - A sub-second rise records both values, the interval, and the expected rate
