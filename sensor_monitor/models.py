@@ -114,9 +114,11 @@ class MonitoringConfig:
     assume_utc_if_naive: bool = False
 
     def __post_init__(self) -> None:
+        if not isinstance(self.assume_utc_if_naive, bool):
+            raise ValueError("assume_utc_if_naive must be a boolean")
         for name in ("normal_range_celsius", "physical_range_celsius"):
             low, high = getattr(self, name)
-            if not isfinite(low) or not isfinite(high) or low > high:
+            if isinstance(low, bool) or isinstance(high, bool) or not isfinite(low) or not isfinite(high) or low > high:
                 raise ValueError(f"{name} must have finite bounds in ascending order")
         for name in (
             "high_temperature_alarm_celsius",
@@ -125,7 +127,7 @@ class MonitoringConfig:
             "flatline_window_seconds",
             "future_tolerance_seconds",
         ):
-            if not isfinite(getattr(self, name)):
+            if isinstance(getattr(self, name), bool) or not isfinite(getattr(self, name)):
                 raise ValueError(f"{name} must be finite")
         for name in ("max_rise_degrees_celsius_per_minute", "future_tolerance_seconds"):
             if getattr(self, name) < 0:
@@ -141,17 +143,23 @@ class MonitoringConfig:
         normal_low, normal_high = raw["normal_range_c"]
         physical_low, physical_high = raw.get("physical_range_c", (-50.0, 2000.0))
         return cls(
-            normal_range_celsius=(float(normal_low), float(normal_high)),
-            high_temperature_alarm_celsius=float(raw["high_temperature_alarm_c"]),
-            max_rise_degrees_celsius_per_minute=float(raw["max_rate_of_rise_c_per_min"]),
-            stale_data_threshold_seconds=float(raw["stale_data_threshold_s"]),
-            flatline_window_seconds=float(
+            normal_range_celsius=(_config_number(normal_low), _config_number(normal_high)),
+            high_temperature_alarm_celsius=_config_number(raw["high_temperature_alarm_c"]),
+            max_rise_degrees_celsius_per_minute=_config_number(raw["max_rate_of_rise_c_per_min"]),
+            stale_data_threshold_seconds=_config_number(raw["stale_data_threshold_s"]),
+            flatline_window_seconds=_config_number(
                 raw.get("flatline_window_s", raw["stale_data_threshold_s"])
             ),
-            physical_range_celsius=(float(physical_low), float(physical_high)),
-            future_tolerance_seconds=float(raw.get("future_tolerance_s", 2.0)),
-            assume_utc_if_naive=bool(raw.get("assume_utc_if_naive", False)),
+            physical_range_celsius=(_config_number(physical_low), _config_number(physical_high)),
+            future_tolerance_seconds=_config_number(raw.get("future_tolerance_s", 2.0)),
+            assume_utc_if_naive=raw.get("assume_utc_if_naive", False),
         )
+
+
+def _config_number(value: Any) -> float:
+    if isinstance(value, bool):
+        raise ValueError("configuration numbers cannot be boolean")
+    return float(value)
 
 
 def _iso(moment: datetime) -> str:

@@ -15,6 +15,9 @@ RAW_CONFIG = {
 class ConfigurationValidation(unittest.TestCase):
     def test_invalid_configuration_is_rejected(self):
         invalid = [
+            {"assume_utc_if_naive": "false"},
+            {"high_temperature_alarm_c": True},
+            {"normal_range_c": [False, 650]},
             {"high_temperature_alarm_c": float("nan")},
             {"stale_data_threshold_s": float("nan")},
             {"max_rate_of_rise_c_per_min": float("inf")},
