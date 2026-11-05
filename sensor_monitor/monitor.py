@@ -38,6 +38,16 @@ _ALARM_TYPES = {
     AlertType.FLATLINE,
 }
 
+# The config limit each condition violates. Names the actual setting so an
+# operator sees which threshold tripped, not just the alert type again.
+_RULE_VIOLATED = {
+    AlertType.HIGH_TEMPERATURE: "high_temperature_alarm_celsius",
+    AlertType.RATE_OF_RISE: "max_rise_degrees_celsius_per_minute",
+    AlertType.OUT_OF_BAND: "normal_range_celsius",
+    AlertType.STALE_DATA: "stale_data_threshold_seconds",
+    AlertType.FLATLINE: "flatline_window_seconds",
+}
+
 
 def default_rules() -> list[DetectionRule]:
     return [
@@ -207,7 +217,7 @@ class SensorMonitor:
             alert_type=condition,
             severity=severity,
             status=status,
-            rule_violated=condition.value,
+            rule_violated=_RULE_VIOLATED[condition],
             observed_value=observed_value,
             threshold=threshold,
             unit=unit,
