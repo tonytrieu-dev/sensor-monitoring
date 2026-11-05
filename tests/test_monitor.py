@@ -36,6 +36,23 @@ def reading(
 
 
 class HappyPath(unittest.TestCase):
+    def test_subsecond_timestamps_are_accepted(self):
+        # Sensors report ~1/s, so sub-second timestamps are valid input; they
+        # must parse, not be quarantined. Python 3.10's fromisoformat is picky
+        # about fractional-second length, so cover 1, 3, and 6 digits plus Z.
+        monitor = SensorMonitor(CONFIG)
+        for ts in [
+            "2026-08-20T14:05:00.5Z",
+            "2026-08-20T14:05:01.250Z",
+            "2026-08-20T14:05:02.123456Z",
+        ]:
+            with self.subTest(timestamp=ts):
+                result = monitor.process(
+                    {"timestamp": ts, "sensor_id": "T-9", "temperature_c": 600.0},
+                    now=BASE + timedelta(seconds=5),
+                )
+                self.assertNotIsInstance(result, QuarantineRecord)
+
     def test_steady_normal_stream_produces_no_alerts(self):
         for field, baseline in [("temperature_c", 600), ("pressure_bar", 3)]:
             with self.subTest(measurement=field):

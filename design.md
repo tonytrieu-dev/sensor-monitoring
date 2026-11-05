@@ -43,7 +43,8 @@ returns the rejected input and its reason in a `QuarantineRecord`.
   identifies one observation. Each sensor has its own history and a fixed
   measurement type. Readings with both measurement fields, or a changed sensor
   type, are quarantined to avoid mixing units.
-- Timestamps use ISO-8601 and are converted to UTC. Timestamps without a
+- Timestamps use ISO-8601 and are converted to UTC, including sub-second
+  fractions. Timestamps without a
   timezone are rejected unless `assume_utc_if_naive` is explicitly the boolean `True`.
 - Readings more than two seconds into the future are rejected by default.
   `process(raw, now=...)` accepts an explicit current time for tests or replay.

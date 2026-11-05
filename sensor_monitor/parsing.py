@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from math import isfinite
@@ -83,8 +84,14 @@ def _parse_timestamp(
 
 
 def _parse_iso(candidate: str) -> datetime:
-    # Python 3.10 requires normalization of the wire format's trailing Z.
-    return datetime.fromisoformat(candidate.removesuffix("Z") + ("+00:00" if candidate.endswith("Z") else ""))
+    # Normalize a trailing Z to +00:00 (Python 3.10's fromisoformat rejects Z),
+    # and pad fractional seconds to 6 digits (3.10 only accepts 3 or 6).
+    text = candidate[:-1] + "+00:00" if candidate.endswith("Z") else candidate
+    match = re.search(r"\.(\d+)", text)
+    if match:
+        digits = match.group(1)
+        text = text.replace("." + digits, "." + (digits + "000000")[:6], 1)
+    return datetime.fromisoformat(text)
 
 
 def _to_utc(parsed: datetime, candidate: str, config: MonitoringConfig) -> datetime:

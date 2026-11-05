@@ -139,22 +139,28 @@ class MonitoringConfig:
 
     @classmethod
     def from_raw(cls, raw: dict[str, Any]) -> MonitoringConfig:
-        # Map the assignment's wire keys (the ambiguous `_c`/`_s` suffixes)
-        # onto clear internal names so they die at this boundary.
+        # Map the assignment's wire keys (the ambiguous `_c`/`_s` suffixes) onto
+        # clear internal names so they die at this boundary. Optional keys are
+        # omitted when absent so the dataclass field defaults stay the single
+        # source of truth (no re-hardcoded fallbacks here).
         normal_low, normal_high = raw["normal_range_c"]
-        physical_low, physical_high = raw.get("physical_range_c", (-50.0, 2000.0))
-        return cls(
-            normal_range_celsius=(_config_number(normal_low), _config_number(normal_high)),
-            high_temperature_alarm_celsius=_config_number(raw["high_temperature_alarm_c"]),
-            max_rise_degrees_celsius_per_minute=_config_number(raw["max_rate_of_rise_c_per_min"]),
-            stale_data_threshold_seconds=_config_number(raw["stale_data_threshold_s"]),
-            flatline_window_seconds=_config_number(
+        kwargs: dict[str, Any] = {
+            "normal_range_celsius": (_config_number(normal_low), _config_number(normal_high)),
+            "high_temperature_alarm_celsius": _config_number(raw["high_temperature_alarm_c"]),
+            "max_rise_degrees_celsius_per_minute": _config_number(raw["max_rate_of_rise_c_per_min"]),
+            "stale_data_threshold_seconds": _config_number(raw["stale_data_threshold_s"]),
+            "flatline_window_seconds": _config_number(
                 raw.get("flatline_window_s", raw["stale_data_threshold_s"])
             ),
-            physical_range_celsius=(_config_number(physical_low), _config_number(physical_high)),
-            future_tolerance_seconds=_config_number(raw.get("future_tolerance_s", 2.0)),
-            assume_utc_if_naive=raw.get("assume_utc_if_naive", False),
-        )
+        }
+        if "physical_range_c" in raw:
+            low, high = raw["physical_range_c"]
+            kwargs["physical_range_celsius"] = (_config_number(low), _config_number(high))
+        if "future_tolerance_s" in raw:
+            kwargs["future_tolerance_seconds"] = _config_number(raw["future_tolerance_s"])
+        if "assume_utc_if_naive" in raw:
+            kwargs["assume_utc_if_naive"] = raw["assume_utc_if_naive"]
+        return cls(**kwargs)
 
 
 def _config_number(value: Any) -> float:

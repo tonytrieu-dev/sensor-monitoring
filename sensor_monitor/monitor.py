@@ -38,8 +38,7 @@ _ALARM_TYPES = {
     AlertType.FLATLINE,
 }
 
-# The config limit each condition violates. Names the actual setting so an
-# operator sees which threshold tripped, not just the alert type again.
+# The config limit each condition violates, so an operator sees which setting tripped.
 _RULE_VIOLATED = {
     AlertType.HIGH_TEMPERATURE: "high_temperature_alarm_celsius",
     AlertType.RATE_OF_RISE: "max_rise_degrees_celsius_per_minute",
@@ -47,6 +46,15 @@ _RULE_VIOLATED = {
     AlertType.STALE_DATA: "stale_data_threshold_seconds",
     AlertType.FLATLINE: "flatline_window_seconds",
 }
+
+# Single source of truth for per-reading conditions; STALE_DATA is excluded
+# because it is time-driven (check_stale_sensors), not reading-driven.
+_READING_CONDITIONS = (
+    AlertType.HIGH_TEMPERATURE,
+    AlertType.RATE_OF_RISE,
+    AlertType.OUT_OF_BAND,
+    AlertType.FLATLINE,
+)
 
 
 def default_rules() -> list[DetectionRule]:
@@ -156,12 +164,7 @@ class SensorMonitor:
     def _run_rules(self, reading: SensorReading, state: SensorState) -> None:
         fired = {rule.evaluate(reading, state, self._config) for rule in self._rules}
         fired.discard(None)
-        for condition in (
-            AlertType.HIGH_TEMPERATURE,
-            AlertType.RATE_OF_RISE,
-            AlertType.OUT_OF_BAND,
-            AlertType.FLATLINE,
-        ):
+        for condition in _READING_CONDITIONS:
             self._transition(
                 state=state,
                 condition=condition,
@@ -236,8 +239,7 @@ class SensorMonitor:
         return alert
 
     def _update_state(self, reading: SensorReading, state: SensorState) -> None:
-        # Hold flatline_since at the start of a run of identical values; reset it
-        # the moment the value changes.
+        # Flatline run starts at the first of a repeated value; a stale gap restarts it.
         previous = state.last_accepted_reading
         gap = previous is not None and (
             reading.timestamp - previous.timestamp
@@ -281,7 +283,9 @@ class SensorMonitor:
                 f"(limit {self._config.max_rise_degrees_celsius_per_minute}); "
                 f"{previous.value}->{reading.value} over {minutes:.3f} min."
             )
-        return f"{sensor} value {reading.value} {reading.unit} unchanged (stuck sensor)."
+        if condition is AlertType.FLATLINE:
+            return f"{sensor} value {reading.value} {reading.unit} unchanged (stuck sensor)."
+        raise ValueError(f"no message defined for condition {condition}")
 
 
 def format_for_operator(alert: Alert) -> str:

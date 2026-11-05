@@ -58,13 +58,13 @@ python3 sensor_monitor/models.py
 
 `tests/test_monitor.py` runs shared behaviors for **both temperature and
 pressure** using named subtests. `tests/test_pressure.py` checks pressure-specific
-rules and invalid inputs. The suite has 15 test methods, with multiple input
+rules and invalid inputs. The suite has 16 test methods, with multiple input
 cases inside the shared tests.
 
 | Category | Pressure coverage |
 |---|---|
 | Happy path | Changing, valid readings produce no alerts and update sensor history. |
-| Edge cases | Invalid timestamps, boolean/nonnumeric values, negative pressure, NaN/infinity, and ambiguous measurements are rejected. Stale timing is checked at the exact threshold. |
+| Edge cases | Invalid timestamps, boolean/nonnumeric values, negative pressure, NaN/infinity, and ambiguous measurements are rejected. Sub-second timestamps are accepted. Stale timing is checked at the exact threshold. |
 | Regressions | Duplicate, older, and timezone-equivalent readings preserve history. Celsius thresholds never apply to pressure, and a sensor cannot change measurement type. |
 | Alert lifecycle | Stale and flatline conditions raise once, remain quiet, and clear on recovery. Missing readings restart the flatline window. |
 | Integration | Real parsing, rules, and sensor state work together; temperature and pressure sensors remain independent. |
