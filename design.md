@@ -55,13 +55,26 @@ returns the rejected input and its reason in a `QuarantineRecord`.
   defaulting to -50 through 2000 degrees Celsius. Pressure is absolute, in bar,
   and must be finite and nonnegative. Missing fields, malformed timestamps,
   overflow, and implausible values are quarantined.
-- Pressure deliberately has no process limits or upper physical bound. The
-  alarm and rate engine is type-agnostic and ready to apply them, but inventing
-  high-pressure or pressure-rise thresholds without real equipment data would
-  risk false alarms or masked faults in a safety context. Adding them later is a
-  localized change: a pressure limit in the config plus a short rule alongside
-  the temperature ones, leaving the alert lifecycle, storage, and coordinator
-  untouched.
+- Pressure gets no threshold alarms because the supplied configuration contains
+  no pressure keys, there is simply nothing to enforce, so this is a scoping fact
+  about the given config, not an unfinished feature. I deliberately did not infer
+  limits from the temperature settings: inventing high-pressure or pressure-rise
+  thresholds without real equipment data would risk false alarms or masked faults
+  in a safety context, which is worse than no alarm at all.
+- Pressure does still get the sensor-agnostic liveness rules, stale-data and
+  flatline, and that distinction is intentional. Those rules need no
+  domain-specific threshold: "the sensor stopped reporting" and "the value never
+  changes" indicate a sick or stuck sensor regardless of what it measures or what
+  a safe operating value would be. The temperature *thresholds* encode
+  equipment-specific safety knowledge I wasn't given for pressure; the liveness
+  rules encode only that a healthy sensor reports fresh, varying data, which is
+  true of any sensor. So pressure is monitored for sensor health but not for
+  process limits, and that split is a judgment, not an omission.
+- Future extensibility (not part of the current scope): if real pressure limits
+  are later provided by domain owners, adding them is a localized change, a
+  pressure limit in the config plus a short rule alongside the temperature ones,
+  because the alarm and rate engine is already type-agnostic. The alert
+  lifecycle, storage, and coordinator stay untouched.
 - Configuration rejects boolean numeric values, NaN (not a number) or infinite limits, reversed
   ranges, negative rate limits or future tolerance, and non-positive stale or
   flatline durations. The timezone option must be an actual boolean.
