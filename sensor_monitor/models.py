@@ -139,10 +139,8 @@ class MonitoringConfig:
 
     @classmethod
     def from_raw(cls, raw: dict[str, Any]) -> MonitoringConfig:
-        # Map the assignment's wire keys (the ambiguous `_c`/`_s` suffixes) onto
-        # clear internal names so they die at this boundary. Optional keys are
-        # omitted when absent so the dataclass field defaults stay the single
-        # source of truth (no re-hardcoded fallbacks here).
+        # Map the assignment's ambiguous `_c`/`_s` wire keys to clear names here.
+        # Absent optional keys are omitted so the field defaults stay authoritative.
         normal_low, normal_high = raw["normal_range_c"]
         kwargs: dict[str, Any] = {
             "normal_range_celsius": (_config_number(normal_low), _config_number(normal_high)),

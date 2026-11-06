@@ -134,19 +134,19 @@ def _self_check() -> None:
     assert band.evaluate(reading(700.0), empty, config) is None
 
     rate = RateOfRiseRule()
-    assert rate.evaluate(reading(600.0), empty, config) is None  # no previous
+    assert rate.evaluate(reading(600.0), empty, config) is None
     with_prev = SensorState(sensor_id="T-101", last_accepted_reading=reading(600.0, 0))
     assert rate.evaluate(reading(612.0, 60), with_prev, config) == AlertType.RATE_OF_RISE
-    assert rate.evaluate(reading(601.0, 60), with_prev, config) is None  # 1/min, under limit
-    assert rate.evaluate(reading(500.0, 60), with_prev, config) is None  # decreasing
+    assert rate.evaluate(reading(601.0, 60), with_prev, config) is None
+    assert rate.evaluate(reading(500.0, 60), with_prev, config) is None
     same_time = SensorState(sensor_id="T-101", last_accepted_reading=reading(600.0, 60))
     assert rate.evaluate(reading(900.0, 60), same_time, config) is None  # zero elapsed guard
 
     flat = FlatlineRule()
     held = SensorState(sensor_id="T-101", flatline_value=600.0, flatline_since=base)
     assert flat.evaluate(reading(600.0, 6), held, config) == AlertType.FLATLINE
-    assert flat.evaluate(reading(600.0, 2), held, config) is None  # within window
-    assert flat.evaluate(reading(601.0, 6), held, config) is None  # value moved
+    assert flat.evaluate(reading(600.0, 2), held, config) is None
+    assert flat.evaluate(reading(601.0, 6), held, config) is None
 
     print("rules.py self-check passed")
 

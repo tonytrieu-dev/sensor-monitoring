@@ -37,9 +37,8 @@ def reading(
 
 class HappyPath(unittest.TestCase):
     def test_subsecond_timestamps_are_accepted(self):
-        # Sensors report ~1/s, so sub-second timestamps are valid input; they
-        # must parse, not be quarantined. Python 3.10's fromisoformat is picky
-        # about fractional-second length, so cover 1, 3, and 6 digits plus Z.
+        # Sub-second timestamps are valid input; Python 3.10's fromisoformat is
+        # picky about fractional-second length, so cover 1, 3, and 6 digits.
         monitor = SensorMonitor(CONFIG)
         for ts in [
             "2026-08-20T14:05:00.5Z",
@@ -295,6 +294,60 @@ class AuditRegressions(unittest.TestCase):
                 self.assertEqual(
                     monitor.check_stale_sensors(BASE + timedelta(seconds=8)), []
                 )
+
+
+class EndToEndScenario(unittest.TestCase):
+    def test_realistic_mixed_stream_produces_expected_timeline(self):
+        # Temperature and pressure drive the engine in one run: temp spikes and
+        # recovers, pressure flatlines, both go stale; asserts the full timeline.
+        monitor = SensorMonitor(CONFIG)
+        now = BASE + timedelta(seconds=6)
+
+        def temp(value, seconds):
+            return reading(value, seconds)
+
+        def press(seconds):
+            return reading(
+                3.0, seconds, sensor_id="P-204", measurement_field="pressure_bar"
+            )
+
+        stream = [
+            temp(600.0, 0),
+            press(0),
+            press(1),
+            temp(700.0, 2),
+            press(2),
+            press(3),
+            temp("bad", 3),
+            temp(600.0, 4),
+            press(4),
+            press(5),
+        ]
+        quarantines = []
+        for raw in stream:
+            out = monitor.process(raw, now=now)
+            if isinstance(out, QuarantineRecord):
+                quarantines.append(out.reason)
+        monitor.check_stale_sensors(BASE + timedelta(seconds=12))
+
+        self.assertEqual(len(quarantines), 1)
+        self.assertIn("nonnumeric", quarantines[0])
+
+        timeline = [
+            (a.sensor_id, a.alert_type, a.status) for a in monitor.store.alerts
+        ]
+        self.assertEqual(
+            timeline,
+            [
+                ("T-101", AlertType.HIGH_TEMPERATURE, AlertStatus.RAISED),
+                ("T-101", AlertType.RATE_OF_RISE, AlertStatus.RAISED),
+                ("T-101", AlertType.HIGH_TEMPERATURE, AlertStatus.CLEARED),
+                ("T-101", AlertType.RATE_OF_RISE, AlertStatus.CLEARED),
+                ("P-204", AlertType.FLATLINE, AlertStatus.RAISED),
+                ("T-101", AlertType.STALE_DATA, AlertStatus.RAISED),
+                ("P-204", AlertType.STALE_DATA, AlertStatus.RAISED),
+            ],
+        )
 
 
 if __name__ == "__main__":

@@ -38,7 +38,6 @@ _ALARM_TYPES = {
     AlertType.FLATLINE,
 }
 
-# The config limit each condition violates, so an operator sees which setting tripped.
 _RULE_VIOLATED = {
     AlertType.HIGH_TEMPERATURE: "high_temperature_alarm_celsius",
     AlertType.RATE_OF_RISE: "max_rise_degrees_celsius_per_minute",

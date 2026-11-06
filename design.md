@@ -129,6 +129,9 @@ history, stale, and flatline checks run for both measurement types:
   another sensor's state remains independent.
 - Malformed readings retain rejection reasons and do not postpone staleness.
 - Reopening storage preserves history; a failed alarm write can be retried.
+- One end-to-end scenario replays a mixed temperature and pressure stream and
+  asserts the full alert timeline: a temperature spike and recovery, a pressure
+  flatline, and both sensors going stale.
 
 Each module also has a small runnable check.
 
