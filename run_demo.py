@@ -1,8 +1,4 @@
-"""Process sample readings, print alerts, and append them to alerts.jsonl
-next to this file.
-
-    python3 run_demo.py
-"""
+"""Process sample readings, print alerts, and append them to alerts.jsonl next to this file."""
 
 from __future__ import annotations
 
