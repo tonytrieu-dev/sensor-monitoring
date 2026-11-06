@@ -133,8 +133,6 @@ history, stale, and flatline checks run for both measurement types:
   asserts the full alert timeline: a temperature spike and recovery, a pressure
   flatline, and both sensors going stale.
 
-Each module also has a small runnable check.
-
 ## Production and safety considerations
 
 1. **Independent evidence:** A plausible but incorrect sensor can hide a real

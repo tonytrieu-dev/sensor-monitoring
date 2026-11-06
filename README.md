@@ -46,19 +46,13 @@ Pressure has no alarm thresholds by design; see [What it detects](#what-it-detec
 
 ```bash
 python3 -m unittest discover -s tests
-
-# Each module also has a small runnable check.
-python3 -m sensor_monitor.parsing
-python3 -m sensor_monitor.rules
-python3 -m sensor_monitor.monitor
-python3 sensor_monitor/models.py
 ```
 
 ### Test coverage
 
 `tests/test_monitor.py` runs shared behaviors for **both temperature and
 pressure** using named subtests. `tests/test_pressure.py` checks pressure-specific
-rules and invalid inputs. The suite has 17 test methods, with multiple input
+rules and invalid inputs. The suite has 19 test methods, with multiple input
 cases inside the shared tests.
 
 | Category | Pressure coverage |

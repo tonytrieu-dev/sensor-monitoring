@@ -9,9 +9,17 @@ from datetime import datetime, timedelta, timezone
 from functools import partial
 from pathlib import Path
 
-from sensor_monitor.models import AlertStatus, AlertType, MonitoringConfig
+from sensor_monitor.models import (
+    AlertStatus,
+    AlertType,
+    MeasurementType,
+    MonitoringConfig,
+    SensorReading,
+    SensorState,
+)
 from sensor_monitor.monitor import AlertStore, SensorMonitor
 from sensor_monitor.parsing import QuarantineRecord
+from sensor_monitor.rules import HighTemperatureRule, RateOfRiseRule
 
 CONFIG = MonitoringConfig.from_raw(
     {
@@ -33,6 +41,16 @@ def reading(
         "sensor_id": sensor_id,
         measurement_field: value,
     }
+
+
+def temp_reading(value, offset_seconds=0.0):
+    return SensorReading(
+        timestamp=BASE + timedelta(seconds=offset_seconds),
+        sensor_id="T-101",
+        measurement_type=MeasurementType.TEMPERATURE,
+        value=value,
+        unit="celsius",
+    )
 
 
 class HappyPath(unittest.TestCase):
@@ -137,6 +155,26 @@ class AuditRegressions(unittest.TestCase):
         monitor.process(reading(600), now=BASE)
         monitor.process(reading(610, 60), now=BASE + timedelta(seconds=60))
         self.assertEqual(monitor.store.alerts, [])
+
+    def test_high_temperature_boundary_is_strict(self):
+        # Exactly at the alarm threshold must not raise; just above must.
+        high = HighTemperatureRule()
+        empty = SensorState(sensor_id="T-101")
+        self.assertIsNone(high.evaluate(temp_reading(675.0), empty, CONFIG))
+        self.assertEqual(
+            high.evaluate(temp_reading(675.01), empty, CONFIG),
+            AlertType.HIGH_TEMPERATURE,
+        )
+
+    def test_rate_rule_guards_non_positive_elapsed(self):
+        # A reading sharing the previous timestamp would divide by zero; the rule
+        # must return None instead. Only reachable at the rule level, since the
+        # monitor rejects same-timestamp readings as duplicates upstream.
+        rate = RateOfRiseRule()
+        state = SensorState(
+            sensor_id="T-101", last_accepted_reading=temp_reading(600.0)
+        )
+        self.assertIsNone(rate.evaluate(temp_reading(900.0), state, CONFIG))
 
     def test_low_band_warning_records_lower_bound(self):
         monitor = SensorMonitor(CONFIG)
