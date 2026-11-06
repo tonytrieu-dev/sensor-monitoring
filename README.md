@@ -67,7 +67,8 @@ cases inside the shared tests.
 | Edge cases | Invalid timestamps, boolean/nonnumeric values, negative pressure, NaN/infinity, and ambiguous measurements are rejected. Sub-second timestamps are accepted. Stale timing is checked at the exact threshold. |
 | Regressions | Duplicate, older, and timezone-equivalent readings preserve history. Celsius thresholds never apply to pressure, and a sensor cannot change measurement type. |
 | Alert lifecycle | Stale and flatline conditions raise once, remain quiet, and clear on recovery. Missing readings restart the flatline window. |
-| Integration | Real parsing, rules, and sensor state work together, and the two sensor types stay independent. A full end-to-end scenario replays one mixed stream where a pressure sensor flatlines while a temperature sensor spikes and recovers, asserting the entire alert timeline including both going stale. |
+| Integration | Real parsing, rules, and sensor state work together, and the two sensor types stay independent. |
+| End-to-end | One mixed stream where a pressure sensor flatlines while a temperature sensor spikes and recovers, asserting the entire alert timeline including both going stale. |
 
 Temperature also has tests for its high-temperature and rate-of-rise rules.
 `tests/test_persistence.py` uses real files to check stored rate evidence and
