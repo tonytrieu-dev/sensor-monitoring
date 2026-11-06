@@ -60,7 +60,9 @@ class HappyPath(unittest.TestCase):
                 monitor = SensorMonitor(CONFIG)
                 values = [baseline + change for change in [0, 0.1, 0.2, 0.25, 0.3]]
                 for i, value in enumerate(values):
-                    monitor.process(sample(value, offset_seconds=i))
+                    monitor.process(
+                        sample(value, offset_seconds=i), now=BASE + timedelta(seconds=i)
+                    )
 
                 self.assertEqual(monitor.store.alerts, [])
                 accepted = monitor.state_for("T-101").last_accepted_reading
@@ -150,7 +152,9 @@ class AuditRegressions(unittest.TestCase):
                 sample = partial(reading, measurement_field=field)
                 monitor = SensorMonitor(CONFIG)
                 for seconds in [0, 11, 12, 13, 14, 15, 16]:
-                    monitor.process(sample(baseline, seconds))
+                    monitor.process(
+                        sample(baseline, seconds), now=BASE + timedelta(seconds=seconds)
+                    )
                     flat = [
                         a
                         for a in monitor.store.alerts

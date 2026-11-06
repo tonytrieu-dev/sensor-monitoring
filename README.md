@@ -91,7 +91,9 @@ and rate engine is type-agnostic and ready for pressure limits, but inventing
 high-pressure or pressure-rise thresholds without real equipment data would risk
 false alarms or masked faults in a safety context. Until those limits are
 defined, pressure is covered by validation, stale, and flatline detection, and
-adding the thresholds later is configuration, not new code.
+adding them later is a small, localized change: a pressure limit in the config
+plus a short rule alongside the temperature ones, with no change to the alert
+lifecycle, storage, or coordinator.
 
 See [design.md](design.md) for the architecture, trade-offs, and safety
 considerations.

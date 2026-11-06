@@ -58,8 +58,10 @@ returns the rejected input and its reason in a `QuarantineRecord`.
 - Pressure deliberately has no process limits or upper physical bound. The
   alarm and rate engine is type-agnostic and ready to apply them, but inventing
   high-pressure or pressure-rise thresholds without real equipment data would
-  risk false alarms or masked faults in a safety context. Defining real limits
-  later is configuration, not new code.
+  risk false alarms or masked faults in a safety context. Adding them later is a
+  localized change: a pressure limit in the config plus a short rule alongside
+  the temperature ones, leaving the alert lifecycle, storage, and coordinator
+  untouched.
 - Configuration rejects boolean numeric values, NaN (not a number) or infinite limits, reversed
   ranges, negative rate limits or future tolerance, and non-positive stale or
   flatline durations. The timezone option must be an actual boolean.
