@@ -40,7 +40,7 @@ Each reading contains a timestamp, a sensor ID, and exactly one measurement:
 `pressure_bar` means absolute pressure in bar; values must be finite and
 nonnegative. Both types support validation, duplicate handling, stale alerts,
 and flatline detection. Temperature limits apply only to temperature readings.
-The assignment supplies no pressure alarm limits, so none are assumed.
+Pressure has no alarm thresholds by design; see [What it detects](#what-it-detects) for why.
 
 ## Run the checks
 
